@@ -438,31 +438,32 @@ def send_to_slack(df, timestamp_str):
         excel_filename = f'store_hours_analysis_{timestamp_str}.xlsx'
         
         with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
-            # Tab 1: Full analysis
             df.to_excel(writer, sheet_name='Full_Analysis', index=False)
-            
-            # Tab 2: Temp close bulk upload
             temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
-            
-            # Tab 3: Change hours bulk upload
             change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
         
         print(f"✅ Created Excel file with {len(temp_close_bulk)} temp close and {len(change_hours_bulk)} change hours stores")
         
         # Create summary message
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
-        summary = "*🏪 Store Hours Analysis Complete*\n\n"
-        summary += "📊 *Summary:*\n"
-        summary += f"• Total stores analyzed: {len(df)}\n"
-        summary += f"• Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        summary += "*Recommendations:*\n"
+        
+        summary_parts = []
+        summary_parts.append("*Store Hours Analysis Complete*")
+        summary_parts.append("")
+        summary_parts.append(f"Total stores analyzed: {len(df)}")
+        summary_parts.append(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        summary_parts.append("")
+        summary_parts.append("Recommendations:")
         
         for rec, count in rec_counts.items():
-            summary += f"• {rec}: {count}\n"
+            summary_parts.append(f"- {rec}: {count}")
         
-        summary += "\n📋 *Bulk Upload Sheets Ready:*\n"
-        summary += f"• Tab 'Bulk_Upload_Temp_Close': **{len(temp_close_bulk)} stores** ready to upload\n"
-        summary += f"• Tab 'Bulk_Upload_Change_Hours': **{len(change_hours_bulk)} stores** ready to upload\n"
+        summary_parts.append("")
+        summary_parts.append("Bulk Upload Sheets Ready:")
+        summary_parts.append(f"- Bulk_Upload_Temp_Close: {len(temp_close_bulk)} stores")
+        summary_parts.append(f"- Bulk_Upload_Change_Hours: {len(change_hours_bulk)} stores")
+        
+        summary = "\n".join(summary_parts)
         
         # Upload Excel file to Slack
         response = client.files_upload_v2(
@@ -478,53 +479,3 @@ def send_to_slack(df, timestamp_str):
     except SlackApiError as e:
         print(f"❌ Slack error: {e.response['error']}")
         raise
-
-# ============= MAIN EXECUTION =============
-if __name__ == "__main__":
-    print("="*60)
-    print("AUTOMATED STORE HOURS ANALYSIS")
-    print("="*60 + "\n")
-    
-    try:
-        # Step 1: Get data from Mode
-        df = get_mode_data()
-        
-        # Step 2: Process with OpenAI
-        processed_df = process_store_hours(df)
-        
-        # Step 3: Create timestamp
-        timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Step 4: Save CSV backup locally
-        csv_file = f'store_hours_analysis_{timestamp_str}.csv'
-        processed_df.to_csv(csv_file, index=False)
-        print(f"\n✅ Saved CSV backup to: {csv_file}")
-        
-        # Step 5: Send to Slack (creates and uploads Excel with bulk upload tabs)
-        send_to_slack(processed_df, timestamp_str)
-        
-        # Print summary
-        print(f"\n📊 Summary:")
-        print(f"   Total stores: {len(processed_df)}")
-        print(f"   Recommendations:")
-        for rec, count in processed_df['RECOMMENDATION'].value_counts().items():
-            print(f"      - {rec}: {count}")
-        
-        print("\n✅ AUTOMATION COMPLETE!")
-        
-    except Exception as e:
-        print(f"\n❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-```
-
----
-
-## Also make sure `requirements.txt` looks like this:
-```
-openai
-pandas
-requests
-slack-sdk
-tqdm
-openpyxl

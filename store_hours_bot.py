@@ -451,22 +451,18 @@ def send_to_slack(df, timestamp_str):
         
         # Create summary message
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
-        summary = f"""*🏪 Store Hours Analysis Complete*
-
-📊 *Summary:*
-- Total stores analyzed: {len(df)}
-- Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-*Recommendations:*
-"""
+        summary = "*🏪 Store Hours Analysis Complete*\n\n"
+        summary += "📊 *Summary:*\n"
+        summary += f"• Total stores analyzed: {len(df)}\n"
+        summary += f"• Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        summary += "*Recommendations:*\n"
+        
         for rec, count in rec_counts.items():
             summary += f"• {rec}: {count}\n"
         
-        summary += f"""
-📋 *Bulk Upload Sheets Ready:*
-- Tab "Bulk_Upload_Temp_Close": **{len(temp_close_bulk)} stores** ready to upload
-- Tab "Bulk_Upload_Change_Hours": **{len(change_hours_bulk)} stores** ready to upload
-"""
+        summary += "\n📋 *Bulk Upload Sheets Ready:*\n"
+        summary += f"• Tab 'Bulk_Upload_Temp_Close': **{len(temp_close_bulk)} stores** ready to upload\n"
+        summary += f"• Tab 'Bulk_Upload_Change_Hours': **{len(change_hours_bulk)} stores** ready to upload\n"
         
         # Upload Excel file to Slack
         response = client.files_upload_v2(
@@ -524,7 +520,7 @@ if __name__ == "__main__":
 
 ---
 
-## Also Update `requirements.txt`:
+## Also make sure `requirements.txt` looks like this:
 ```
 openai
 pandas

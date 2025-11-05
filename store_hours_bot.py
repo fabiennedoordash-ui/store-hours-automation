@@ -11,6 +11,11 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import os
 
+print("=" * 60)
+print("SCRIPT STARTED - Testing output")
+print("=" * 60)
+print("Python script is running!")
+
 # ============= CREDENTIALS (from environment variables) =============
 MODE_TOKEN = os.environ.get('MODE_TOKEN')
 MODE_SECRET = os.environ.get('MODE_SECRET')
@@ -21,7 +26,13 @@ QUERY_ID = '036132875b62'
 openai.api_key = os.environ.get('OPENAI_API_KEY')
 
 SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN')
-SLACK_CHANNEL_ID = 'C098G9URHEV'  # #daily-ai-drsc-experiment
+SLACK_CHANNEL_ID = 'C098G9URHEV'
+
+print(f"✅ Loaded environment variables")
+print(f"   MODE_TOKEN: {'Set' if MODE_TOKEN else 'MISSING'}")
+print(f"   MODE_SECRET: {'Set' if MODE_SECRET else 'MISSING'}")
+print(f"   OPENAI_API_KEY: {'Set' if openai.api_key else 'MISSING'}")
+print(f"   SLACK_BOT_TOKEN: {'Set' if SLACK_BOT_TOKEN else 'MISSING'}")
 
 # ============= CONFIGURATION =============
 closure_categories = {
@@ -113,7 +124,7 @@ def combine_confidence(parse_coverage, clarity):
 
 # ============= FUNCTION 1: GET DATA FROM MODE =============
 def get_mode_data():
-    print("🔄 Fetching data from Mode...\n")
+    print("\n🔄 Fetching data from Mode...")
     
     run_url = f'https://app.mode.com/api/{MODE_ACCOUNT}/reports/{REPORT_ID}/runs'
     response = requests.post(run_url, auth=(MODE_TOKEN, MODE_SECRET))
@@ -154,7 +165,7 @@ def get_mode_data():
 
 # ============= FUNCTION 2: PROCESS WITH OPENAI =============
 def process_store_hours(df):
-    print("🤖 Processing with OpenAI vision API...\n")
+    print("\n🤖 Processing with OpenAI vision API...")
     
     recommendations, reasons, summary_reasons = [], [], []
     deactivation_reason_id, is_temp_deactivation = [], []
@@ -385,13 +396,11 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
 
 # ============= FUNCTION 3: CREATE BULK UPLOAD SHEETS =============
 def create_bulk_upload_sheets(df):
-    """Create bulk upload dataframes for temp close and change hours"""
+    print("\n📋 Creating bulk upload sheets...")
     
-    # Filter for each recommendation type
     temp_close_df = df[df['RECOMMENDATION'] == 'Temporarily Close For Day'].copy()
     change_hours_df = df[df['RECOMMENDATION'] == 'Change Store Hours'].copy()
     
-    # Create Temp Close bulk upload format
     if len(temp_close_df) > 0:
         temp_close_bulk = pd.DataFrame({
             'store_id': temp_close_df['STORE_ID'].values,
@@ -403,13 +412,11 @@ def create_bulk_upload_sheets(df):
     else:
         temp_close_bulk = pd.DataFrame(columns=['store_id', 'deactivation_reason_id', 'is_temp_deactivation', 'duration', 'notes'])
     
-    # Create Change Hours bulk upload format
     if len(change_hours_df) > 0:
         change_hours_bulk = pd.DataFrame({
             'store_id': change_hours_df['STORE_ID'].values
         })
         
-        # Add day columns in correct order: day_start_time, day_end_time
         days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
         for day in days:
             start_col = f'start_time_{day}'
@@ -422,6 +429,10 @@ def create_bulk_upload_sheets(df):
             cols.extend([f'{day}_start_time', f'{day}_end_time'])
         change_hours_bulk = pd.DataFrame(columns=cols)
     
+    print(f"✅ Created bulk upload sheets:")
+    print(f"   - Temp close: {len(temp_close_bulk)} stores")
+    print(f"   - Change hours: {len(change_hours_bulk)} stores")
+    
     return temp_close_bulk, change_hours_bulk
 
 # ============= FUNCTION 4: SEND TO SLACK =============
@@ -431,10 +442,8 @@ def send_to_slack(df, timestamp_str):
     client = WebClient(token=SLACK_BOT_TOKEN)
     
     try:
-        # Create bulk upload sheets
         temp_close_bulk, change_hours_bulk = create_bulk_upload_sheets(df)
         
-        # Create Excel file with multiple tabs
         excel_filename = f'store_hours_analysis_{timestamp_str}.xlsx'
         
         with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
@@ -442,9 +451,8 @@ def send_to_slack(df, timestamp_str):
             temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
             change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
         
-        print(f"✅ Created Excel file with {len(temp_close_bulk)} temp close and {len(change_hours_bulk)} change hours stores")
+        print(f"✅ Created Excel file: {excel_filename}")
         
-        # Create summary message
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
         
         summary_parts = []
@@ -465,7 +473,7 @@ def send_to_slack(df, timestamp_str):
         
         summary = "\n".join(summary_parts)
         
-        # Upload Excel file to Slack
+        print("📤 Uploading to Slack...")
         response = client.files_upload_v2(
             channel=SLACK_CHANNEL_ID,
             file=excel_filename,
@@ -479,3 +487,36 @@ def send_to_slack(df, timestamp_str):
     except SlackApiError as e:
         print(f"❌ Slack error: {e.response['error']}")
         raise
+
+# ============= MAIN EXECUTION =============
+if __name__ == "__main__":
+    print("="*60)
+    print("AUTOMATED STORE HOURS ANALYSIS")
+    print("="*60 + "\n")
+    
+    try:
+        df = get_mode_data()
+        processed_df = process_store_hours(df)
+        
+        timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        csv_file = f'store_hours_analysis_{timestamp_str}.csv'
+        processed_df.to_csv(csv_file, index=False)
+        print(f"\n✅ Saved CSV backup to: {csv_file}")
+        
+        send_to_slack(processed_df, timestamp_str)
+        
+        print(f"\n📊 Summary:")
+        print(f"   Total stores: {len(processed_df)}")
+        print(f"   Recommendations:")
+        for rec, count in processed_df['RECOMMENDATION'].value_counts().items():
+            print(f"      - {rec}: {count}")
+        
+        print("\n✅ AUTOMATION COMPLETE!")
+        
+    except Exception as e:
+        print(f"\n❌ ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+        

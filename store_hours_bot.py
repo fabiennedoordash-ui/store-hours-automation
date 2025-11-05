@@ -383,13 +383,72 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
     
     return df
 
-# ============= FUNCTION 3: SEND TO SLACK =============
-def send_to_slack(df, filename):
+# ============= FUNCTION 3: CREATE BULK UPLOAD SHEETS =============
+def create_bulk_upload_sheets(df):
+    """Create bulk upload dataframes for temp close and change hours"""
+    
+    # Filter for each recommendation type
+    temp_close_df = df[df['RECOMMENDATION'] == 'Temporarily Close For Day'].copy()
+    change_hours_df = df[df['RECOMMENDATION'] == 'Change Store Hours'].copy()
+    
+    # Create Temp Close bulk upload format
+    if len(temp_close_df) > 0:
+        temp_close_bulk = pd.DataFrame({
+            'store_id': temp_close_df['STORE_ID'].values,
+            'deactivation_reason_id': 67,
+            'is_temp_deactivation': 'TRUE',
+            'duration': 12,
+            'notes': 'DRSC AI Tool marked as temp deactivate'
+        })
+    else:
+        temp_close_bulk = pd.DataFrame(columns=['store_id', 'deactivation_reason_id', 'is_temp_deactivation', 'duration', 'notes'])
+    
+    # Create Change Hours bulk upload format
+    if len(change_hours_df) > 0:
+        change_hours_bulk = pd.DataFrame({
+            'store_id': change_hours_df['STORE_ID'].values
+        })
+        
+        # Add day columns in correct order: day_start_time, day_end_time
+        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        for day in days:
+            start_col = f'start_time_{day}'
+            end_col = f'end_time_{day}'
+            change_hours_bulk[f'{day}_start_time'] = change_hours_df[start_col].values
+            change_hours_bulk[f'{day}_end_time'] = change_hours_df[end_col].values
+    else:
+        cols = ['store_id']
+        for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+            cols.extend([f'{day}_start_time', f'{day}_end_time'])
+        change_hours_bulk = pd.DataFrame(columns=cols)
+    
+    return temp_close_bulk, change_hours_bulk
+
+# ============= FUNCTION 4: SEND TO SLACK =============
+def send_to_slack(df, timestamp_str):
     print("\n📤 Sending to Slack...")
     
     client = WebClient(token=SLACK_BOT_TOKEN)
     
     try:
+        # Create bulk upload sheets
+        temp_close_bulk, change_hours_bulk = create_bulk_upload_sheets(df)
+        
+        # Create Excel file with multiple tabs
+        excel_filename = f'store_hours_analysis_{timestamp_str}.xlsx'
+        
+        with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
+            # Tab 1: Full analysis
+            df.to_excel(writer, sheet_name='Full_Analysis', index=False)
+            
+            # Tab 2: Temp close bulk upload
+            temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
+            
+            # Tab 3: Change hours bulk upload
+            change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
+        
+        print(f"✅ Created Excel file with {len(temp_close_bulk)} temp close and {len(change_hours_bulk)} change hours stores")
+        
         # Create summary message
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
         summary = f"""*🏪 Store Hours Analysis Complete*
@@ -403,10 +462,16 @@ def send_to_slack(df, filename):
         for rec, count in rec_counts.items():
             summary += f"• {rec}: {count}\n"
         
-        # Upload file to Slack
+        summary += f"""
+📋 *Bulk Upload Sheets Ready:*
+- Tab "Bulk_Upload_Temp_Close": **{len(temp_close_bulk)} stores** ready to upload
+- Tab "Bulk_Upload_Change_Hours": **{len(change_hours_bulk)} stores** ready to upload
+"""
+        
+        # Upload Excel file to Slack
         response = client.files_upload_v2(
             channel=SLACK_CHANNEL_ID,
-            file=filename,
+            file=excel_filename,
             title=f"Store Hours Analysis - {datetime.datetime.now().strftime('%Y-%m-%d')}",
             initial_comment=summary
         )
@@ -431,13 +496,16 @@ if __name__ == "__main__":
         # Step 2: Process with OpenAI
         processed_df = process_store_hours(df)
         
-        # Step 3: Save output
-        output_file = f'store_hours_analysis_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-        processed_df.to_csv(output_file, index=False)
-        print(f"\n✅ Saved results to: {output_file}")
+        # Step 3: Create timestamp
+        timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Step 4: Send to Slack
-        send_to_slack(processed_df, output_file)
+        # Step 4: Save CSV backup locally
+        csv_file = f'store_hours_analysis_{timestamp_str}.csv'
+        processed_df.to_csv(csv_file, index=False)
+        print(f"\n✅ Saved CSV backup to: {csv_file}")
+        
+        # Step 5: Send to Slack (creates and uploads Excel with bulk upload tabs)
+        send_to_slack(processed_df, timestamp_str)
         
         # Print summary
         print(f"\n📊 Summary:")
@@ -452,3 +520,15 @@ if __name__ == "__main__":
         print(f"\n❌ ERROR: {e}")
         import traceback
         traceback.print_exc()
+```
+
+---
+
+## Also Update `requirements.txt`:
+```
+openai
+pandas
+requests
+slack-sdk
+tqdm
+openpyxl

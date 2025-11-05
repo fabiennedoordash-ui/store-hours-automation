@@ -3,3 +3,4 @@ pandas
 requests
 slack-sdk
 tqdm
+openpyxl

@@ -51,6 +51,12 @@ uncertain_phrases = [
     "blurry", "low resolution", "hard to read", "illegible", "glare", "shadow"
 ]
 
+permanent_closure_phrases = [
+    "permanently closing", "closed permanently", "permanent closure",
+    "permanently closed", "closing permanently", "will be permanently closing",
+    "this location is now permanently closed", "store closing" # only when clearly permanent
+]
+
 # ============= HELPER FUNCTIONS =============
 def categorize_closure(text):
     lower = text.lower()
@@ -122,6 +128,34 @@ def extract_clarity_score(text):
 def combine_confidence(parse_coverage, clarity):
     return round(max(0.0, min(1.0, 0.6*parse_coverage + 0.4*clarity)), 2)
 
+def is_permanent_closure(text):
+    """Check if the text indicates a permanent closure"""
+    lower = text.lower()
+    
+    # Strong indicators of permanent closure
+    strong_indicators = [
+        "permanently closing", "closed permanently", "permanent closure",
+        "permanently closed", "closing permanently", "will be permanently closing",
+        "this location is now permanently closed"
+    ]
+    
+    # Check for strong indicators
+    for phrase in strong_indicators:
+        if phrase in lower:
+            return True
+    
+    # Check for "store closing" but make sure it's clearly permanent
+    if "store closing" in lower:
+        # Look for context that indicates permanence
+        permanent_context = [
+            "thank you for", "final", "last day", "we are closing",
+            "location is closing", "this store is closing"
+        ]
+        if any(ctx in lower for ctx in permanent_context):
+            return True
+    
+    return False
+
 # ============= FUNCTION 1: GET DATA FROM MODE =============
 def get_mode_data():
     print("\n🔄 Fetching data from Mode...")
@@ -192,24 +226,32 @@ def process_store_hours(df):
             continue
 
         prompt = f"""
-You are reviewing a Dasher photo of a CVS store entrance.
+You are reviewing a Dasher photo of a store entrance.
 
 Tasks:
-1) Extract posted store hours (ignore pharmacy).
-2) Check for signs of temporary closure (system, weather, maintenance, staff, etc.).
-3) Compare posted hours to DoorDash-listed hours: {store_hours}
+1) Check if the store is PERMANENTLY closing (signs saying "permanently closing", "closed permanently", "store closing" with final goodbye messages, etc.)
+2) Check for signs of TEMPORARY closure (system issues, weather, maintenance, staff shortages, etc.)
+3) Extract posted store hours (ignore pharmacy hours)
+4) Compare posted hours to DoorDash-listed hours: {store_hours}
 
 Choose ONE recommendation:
-- Change Store Hours
+- Permanently Close Store (ONLY if you see clear signs of permanent closure)
+- Temporarily Close For Day (for temporary issues like weather, maintenance, system problems)
+- Change Store Hours (if posted hours differ from DoorDash hours)
 - Add Special Hours
-- Temporarily Close For Day
 - No Change
+
+IMPORTANT: Only recommend "Permanently Close Store" if you are VERY CONFIDENT the store is closing permanently. Look for phrases like:
+- "Permanently closing"
+- "Closed permanently"  
+- "Thank you for your support over the years" (farewell messages)
+- "Store closing" with context indicating it's permanent, not just closing early
 
 If recommending changed hours, list the full weekly schedule clearly (e.g. Monday: 08:00 - 22:00).
 
 Also, provide this line at the end:
 Clarity score: X
-Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours are visible and readable in the image (consider size, blur, glare, obstructions).
+Where X is a number between 0.0 and 1.0 indicating how clearly the signage is visible and readable.
 """
         prompt += "\nAssume store closing times like '10:00' or '12:00' without AM/PM are in the evening (PM)."
 
@@ -257,6 +299,20 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
                     bulk_hours[day]["end"].append("")
                 continue
 
+            # CHECK FOR PERMANENT CLOSURE FIRST (highest priority)
+            if "permanently close" in lower and is_permanent_closure(result):
+                recommendations.append("Permanently Close Store")
+                reasons.append(reason)
+                summary_reasons.append("Permanent closure detected")
+                deactivation_reason_id.append("23")
+                is_temp_deactivation.append(False)
+                confidence_scores.append(0.95)  # High confidence for permanent closures
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+                continue
+
+            # Check for temporary closures
             if "special hour" in lower:
                 recommendations.append("Temporarily Close For Day")
                 reasons.append(reason)
@@ -275,6 +331,7 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
                      "closed for the day", "closed today", "closed due to", "store is closed"
                  ]))
                 and "change store hour" not in lower
+                and "permanently" not in lower
             ):
                 recommendations.append("Temporarily Close For Day")
                 reasons.append(reason)
@@ -287,6 +344,7 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
                     bulk_hours[day]["end"].append("")
                 continue
 
+            # Check for hour changes
             if "recommend" in lower and "change store hour" in lower:
                 if any(p in lower for p in uncertain_phrases):
                     recommendations.append("No change")
@@ -398,9 +456,21 @@ Where X is a number between 0.0 and 1.0 indicating how clearly the posted hours 
 def create_bulk_upload_sheets(df):
     print("\n📋 Creating bulk upload sheets...")
     
+    perm_close_df = df[df['RECOMMENDATION'] == 'Permanently Close Store'].copy()
     temp_close_df = df[df['RECOMMENDATION'] == 'Temporarily Close For Day'].copy()
     change_hours_df = df[df['RECOMMENDATION'] == 'Change Store Hours'].copy()
     
+    # Permanent closure bulk upload
+    if len(perm_close_df) > 0:
+        perm_close_bulk = pd.DataFrame({
+            'store_id': perm_close_df['STORE_ID'].values,
+            'deactivation_reason_id': 23,
+            'notes': 'DRSC AI tool flagged as perm closing'
+        })
+    else:
+        perm_close_bulk = pd.DataFrame(columns=['store_id', 'deactivation_reason_id', 'notes'])
+    
+    # Temporary closure bulk upload
     if len(temp_close_df) > 0:
         temp_close_bulk = pd.DataFrame({
             'store_id': temp_close_df['STORE_ID'].values,
@@ -412,6 +482,7 @@ def create_bulk_upload_sheets(df):
     else:
         temp_close_bulk = pd.DataFrame(columns=['store_id', 'deactivation_reason_id', 'is_temp_deactivation', 'duration', 'notes'])
     
+    # Change hours bulk upload
     if len(change_hours_df) > 0:
         change_hours_bulk = pd.DataFrame({
             'store_id': change_hours_df['STORE_ID'].values
@@ -430,10 +501,11 @@ def create_bulk_upload_sheets(df):
         change_hours_bulk = pd.DataFrame(columns=cols)
     
     print(f"✅ Created bulk upload sheets:")
+    print(f"   - Perm close: {len(perm_close_bulk)} stores")
     print(f"   - Temp close: {len(temp_close_bulk)} stores")
     print(f"   - Change hours: {len(change_hours_bulk)} stores")
     
-    return temp_close_bulk, change_hours_bulk
+    return perm_close_bulk, temp_close_bulk, change_hours_bulk
 
 # ============= FUNCTION 4: SEND TO SLACK =============
 def send_to_slack(df, timestamp_str):
@@ -442,12 +514,13 @@ def send_to_slack(df, timestamp_str):
     client = WebClient(token=SLACK_BOT_TOKEN)
     
     try:
-        temp_close_bulk, change_hours_bulk = create_bulk_upload_sheets(df)
+        perm_close_bulk, temp_close_bulk, change_hours_bulk = create_bulk_upload_sheets(df)
         
         excel_filename = f'store_hours_analysis_{timestamp_str}.xlsx'
         
         with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Full_Analysis', index=False)
+            perm_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Perm_Close', index=False)
             temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
             change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
         
@@ -468,6 +541,7 @@ def send_to_slack(df, timestamp_str):
         
         summary_parts.append("")
         summary_parts.append("Bulk Upload Sheets Ready:")
+        summary_parts.append(f"- Bulk_Upload_Perm_Close: {len(perm_close_bulk)} stores")
         summary_parts.append(f"- Bulk_Upload_Temp_Close: {len(temp_close_bulk)} stores")
         summary_parts.append(f"- Bulk_Upload_Change_Hours: {len(change_hours_bulk)} stores")
         
@@ -519,4 +593,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         raise
-        

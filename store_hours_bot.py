@@ -41,6 +41,8 @@ closure_categories = {
     "weather issue": ["flood", "rain", "snow", "storm", "hurricane", "weather"],
     "emergency": ["emergency", "medical", "fire", "ambulance", "police", "safety"],
     "staffing issue": ["staff", "understaffed", "no employees", "short staffed", "sick callout"],
+    "payment issue": ["cash only", "registers down", "no credit card", "credit cards not accepted", 
+                      "card reader down", "cannot accept cards", "cash payment only"]
 }
 
 uncertain_phrases = [
@@ -57,15 +59,24 @@ permanent_closure_phrases = [
     "this location is now permanently closed", "store closing"
 ]
 
+# STRICTER: Only very explicit address change phrases
 address_change_phrases = [
-    "we are moving", "we have moved", "we've moved", "relocated", "relocation",
-    "new location", "new address", "moved to", "moving to", "find us at"
+    "we are moving to", "we have moved to", "we've moved to",
+    "relocated to", "new location:", "new address:",
+    "moved to:", "find us at our new location"
 ]
 
-# NEW: Long-term temporary closure phrases
+# Long-term temporary closure phrases
 long_term_closure_phrases = [
     "closed until further notice", "until further notice", "closed indefinitely",
     "temporarily closed until further notice"
+]
+
+# Payment system issues
+payment_issue_phrases = [
+    "cash only", "registers down", "no credit card", "credit cards not accepted",
+    "card reader down", "cannot accept cards", "cash payment only",
+    "no cards accepted", "credit card machine down", "debit cards not accepted"
 ]
 
 # ============= HELPER FUNCTIONS =============
@@ -153,7 +164,8 @@ def extract_clarity_score(text):
         return 0.20
     return 0.60
 
-def combine_confidence(parse_coverage, clarity):
+def hour_change_confidence(parse_coverage, clarity):
+    """Confidence score specifically for hour changes"""
     return round(max(0.0, min(1.0, 0.6*parse_coverage + 0.4*clarity)), 2)
 
 def is_permanent_closure(text):
@@ -189,9 +201,15 @@ def is_long_term_closure(text):
     lower = text.lower()
     return any(phrase in lower for phrase in long_term_closure_phrases)
 
-def is_address_change(text):
-    """Check if the text indicates an address change/relocation"""
+def is_payment_issue(text):
+    """Check if the text indicates payment system issues"""
     lower = text.lower()
+    return any(phrase in lower for phrase in payment_issue_phrases)
+
+def is_address_change(text):
+    """Check if the text indicates an address change/relocation - VERY STRICT"""
+    lower = text.lower()
+    # Must have very explicit phrases
     return any(phrase in lower for phrase in address_change_phrases)
 
 # ============= FUNCTION 1: GET DATA FROM MODE =============
@@ -259,7 +277,7 @@ def process_store_hours(df):
     deactivation_reason_id, is_temp_deactivation = [], []
     confidence_scores = []
     new_addresses = []
-    temp_duration = []  # NEW: Track duration for temp closures
+    temp_duration = []
     
     bulk_hours = {day: {"start": [], "end": []} for day in [
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
@@ -293,24 +311,30 @@ def process_store_hours(df):
 You are reviewing a Dasher photo of a store entrance. CRITICAL: Check for closure and relocation signs FIRST before trying to read store hours.
 
 PRIORITY ORDER (check in this order):
-1) Is there a RELOCATION/ADDRESS CHANGE sign? (e.g., "We are moving", "Relocated", "New location", "Find us at")
+1) Is there a RELOCATION/ADDRESS CHANGE sign? BE VERY CONSERVATIVE - only flag if you see EXPLICIT text like "WE ARE MOVING TO [address]" or "NEW LOCATION: [address]" or "RELOCATED TO [address]"
 2) Is there a LONG-TERM TEMPORARY closure sign? (e.g., "Closed until further notice", "Temporarily closed until further notice")
 3) Is there a PERMANENT closure sign? (e.g., "permanently closing", "closed permanently")
-4) Is there a TEMPORARY closure sign? (e.g., "POWER OUT", "closed due to weather", "system down", "maintenance", "closed today")
-5) Are the posted store hours clearly visible AND readable?
+4) Is there a PAYMENT SYSTEM issue? (e.g., "CASH ONLY", "Registers Down", "No Credit Cards", "Card Reader Down")
+5) Is there a TEMPORARY closure sign? (e.g., "POWER OUT", "NO POWER", "closed due to weather", "system down", "maintenance", "closed today", "open in X minutes")
+6) Are the posted store hours clearly visible AND readable?
 
 Choose ONE recommendation:
-- **Address Change** - If you see ANY sign about moving, relocation, or new address. If a new address is visible, extract it.
+- **Address Change** - ONLY if you see VERY EXPLICIT signs like "WE ARE MOVING TO [new address]" or "NEW LOCATION: [address]" - be extremely conservative with this
 - **Temporarily Close For Day - Long Term** - If you see "closed until further notice" or "closed indefinitely" (no specific reopening date)
 - **Permanently Close Store** - ONLY if you see clear permanent closure signage
-- **Temporarily Close For Day** - If you see ANY temporary closure sign with a specific issue (power out, maintenance, weather, system issues, etc.)
+- **Temporarily Close For Day** - If you see ANY of these:
+  * Payment issues: "Cash Only", "Registers Down", "No Credit Cards", "Card Reader Down"
+  * Power/system issues: "NO POWER", "POWER OUT", "System Down"
+  * Temporary closure: maintenance, weather, closed for the day
+  * Opening soon: "Open in X minutes", "Opening soon"
 - **Change Store Hours** - If there are NO closure/relocation signs AND you can read the hours with reasonable confidence
 - **No Change** - If hours are completely unreadable OR match DoorDash hours
 
 IMPORTANT: 
+- For "Address Change", be EXTREMELY conservative - only flag if there is a clear sign explicitly stating the store is moving with a new address shown
 - "Closed until further notice" should be flagged as "Temporarily Close For Day - Long Term", NOT permanent closure
-- If you see "We are moving", "Relocated", "New location", etc., recommend "Address Change" and extract the new address if visible
-- If you see a "POWER OUT", "CLOSED", or any temporary closure sign, recommend "Temporarily Close For Day"
+- Payment issues like "Cash Only" or "Registers Down" should ALWAYS be flagged as "Temporarily Close For Day" because DoorDash requires card payments
+- Signs like "NO POWER" or "Open in 45 minutes" should be flagged as "Temporarily Close For Day"
 - Only recommend "No Change" if you literally CANNOT read the hours at all or if they match DoorDash hours
 
 Current DoorDash hours: {store_hours}
@@ -320,9 +344,25 @@ If recommending changed hours, list the full weekly schedule clearly (e.g. Monda
 If you detect an address change, include a line:
 New Address: [the new address if visible, or "Not shown" if not visible]
 
-Provide this line at the end:
-Clarity score: X.XX
-Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how clearly ANY signage is visible.
+CRITICAL - CLARITY SCORING INSTRUCTIONS:
+Rate clarity based ONLY on the specific sign relevant to your recommendation:
+
+- If recommending "Temporarily Close For Day" → Rate ONLY the closure sign clarity (e.g., "Open in 45 Minutes", "NO POWER", "Closed Today")
+- If recommending "Change Store Hours" → Rate ONLY the store hours sign clarity
+- If recommending "Permanently Close Store" → Rate ONLY the permanent closure sign clarity
+- If recommending "Address Change" → Rate ONLY the relocation sign clarity
+
+IGNORE when rating clarity:
+- Overall image quality/glare/reflections on windows
+- Clarity of other unrelated signs in the image
+- Background visibility
+- Other papers or stickers
+
+Focus ONLY on: "Can I clearly read the specific sign that led to my recommendation?"
+
+At the end, provide:
+Clarity score: X.XX (rating ONLY the specific sign I'm reading for my recommendation)
+Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
 """
         prompt += "\nAssume store closing times like '10:00' or '12:00' without AM/PM are in the evening (PM)."
 
@@ -346,29 +386,14 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
 
-            # Keep clarity threshold at 0.9
-            if clarity < 0.9:
-                recommendations.append("No change")
-                reasons.append("Clarity too low (<0.9), skipping recommendation")
-                summary_reasons.append("Low clarity image")
-                deactivation_reason_id.append("")
-                is_temp_deactivation.append(False)
-                confidence_scores.append(combine_confidence(parse_coverage, clarity))
-                new_addresses.append("")
-                temp_duration.append("")
-                for day in bulk_hours:
-                    bulk_hours[day]["start"].append("")
-                    bulk_hours[day]["end"].append("")
-                continue
-
-            # Check for uncertainty
+            # Check for uncertainty phrases first
             if any(p in lower for p in uncertain_phrases):
                 recommendations.append("No change")
-                reasons.append("Model expressed uncertainty despite clarity threshold")
+                reasons.append("Model expressed uncertainty")
                 summary_reasons.append("Image unreadable or GPT uncertain")
                 deactivation_reason_id.append("")
                 is_temp_deactivation.append(False)
-                confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                confidence_scores.append(0.20)
                 new_addresses.append("")
                 temp_duration.append("")
                 for day in bulk_hours:
@@ -379,24 +404,60 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
             # RELAXED: Only check for SEVERE quality issues
             has_severe_quality_issues = any(phrase in lower for phrase in severe_quality_issues)
 
-            # PRIORITY 0: Check for ADDRESS CHANGE (highest priority!)
-            if "address change" in lower or is_address_change(result):
+            # PRIORITY 0: Check for ADDRESS CHANGE - VERY STRICT
+            if is_address_change(result):
+                # Address changes need highest clarity (0.92+)
+                if clarity < 0.92:
+                    recommendations.append("No change")
+                    reasons.append(f"Clarity of relocation sign too low ({clarity:.2f} < 0.92)")
+                    summary_reasons.append("Clarity too low for address change")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
                 new_addr = extract_new_address(result)
-                recommendations.append("Address Change")
-                reasons.append(reason)
-                summary_reasons.append("Store relocation/address change detected")
-                deactivation_reason_id.append("")
-                is_temp_deactivation.append(False)
-                confidence_scores.append(max(0.85, clarity))
-                new_addresses.append(new_addr)
-                temp_duration.append("")
-                for day in bulk_hours:
-                    bulk_hours[day]["start"].append("")
-                    bulk_hours[day]["end"].append("")
-                continue
+                # Additional validation: must have extracted an address OR very explicit language
+                explicit_relocation = any(phrase in lower for phrase in [
+                    "we have moved to", "we are moving to", "relocated to", "new location:", "new address:"
+                ])
+                
+                if new_addr or explicit_relocation:
+                    recommendations.append("Address Change")
+                    reasons.append(reason)
+                    summary_reasons.append("Store relocation/address change detected")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(max(0.85, clarity))
+                    new_addresses.append(new_addr)
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
 
-            # PRIORITY 0.5: Check for LONG-TERM TEMPORARY closure ("until further notice")
+            # PRIORITY 0.5: Check for LONG-TERM TEMPORARY closure
             if is_long_term_closure(result) or "long term" in lower:
+                # Long-term closures need medium clarity (0.75+)
+                if clarity < 0.75:
+                    recommendations.append("No change")
+                    reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
+                    summary_reasons.append("Clarity too low for long-term closure")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
                 recommendations.append("Temporarily Close For Day")
                 reasons.append(reason)
                 summary_reasons.append("Closed until further notice")
@@ -410,8 +471,23 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                     bulk_hours[day]["end"].append("")
                 continue
 
-            # PRIORITY 1: Check for PERMANENT closure (but NOT if it's "until further notice")
+            # PRIORITY 1: Check for PERMANENT closure
             if "permanently close" in lower and is_permanent_closure(result):
+                # Permanent closures need high clarity (0.85+)
+                if clarity < 0.85:
+                    recommendations.append("No change")
+                    reasons.append(f"Clarity of permanent closure sign too low ({clarity:.2f} < 0.85)")
+                    summary_reasons.append("Clarity too low for permanent closure")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
                 recommendations.append("Permanently Close Store")
                 reasons.append(reason)
                 summary_reasons.append("Permanent closure detected")
@@ -425,14 +501,59 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                     bulk_hours[day]["end"].append("")
                 continue
 
+            # PRIORITY 1.5: Check for PAYMENT ISSUES
+            if is_payment_issue(result):
+                # Payment issues need low clarity (0.75+) - signs are usually clear
+                if clarity < 0.75:
+                    recommendations.append("No change")
+                    reasons.append(f"Clarity of payment issue sign too low ({clarity:.2f} < 0.75)")
+                    summary_reasons.append("Clarity too low for payment issue")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
+                recommendations.append("Temporarily Close For Day")
+                reasons.append(reason)
+                summary_reasons.append("Payment issue")
+                deactivation_reason_id.append("67")
+                is_temp_deactivation.append(True)
+                confidence_scores.append(max(0.80, clarity))
+                new_addresses.append("")
+                temp_duration.append(12)  # Regular temp closure = 12 hours
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+                continue
+
             # PRIORITY 2: Check for regular TEMPORARY closure
             if "temporarily close" in lower or "special hour" in lower:
+                # Temp closures need low clarity (0.75+) - closure signs usually clear
+                if clarity < 0.75:
+                    recommendations.append("No change")
+                    reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
+                    summary_reasons.append("Clarity too low for temp closure")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
                 recommendations.append("Temporarily Close For Day")
                 reasons.append(reason)
                 summary_reasons.append(categorize_closure(lower))
                 deactivation_reason_id.append("67")
                 is_temp_deactivation.append(True)
-                confidence_scores.append(max(0.8, combine_confidence(parse_coverage, clarity)))
+                confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
                 temp_duration.append(12)  # Regular temp closure = 12 hours
                 for day in bulk_hours:
@@ -443,31 +564,16 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
             # Additional temp closure checks
             if (any(phrase in lower for phrase in [
                 "closed for the day", "closed today", "closed due to", "store is closed",
-                "power out", "no power", "maintenance", "system down"
+                "power out", "no power", "maintenance", "system down", "open in", "opening in"
             ]) and "permanently" not in lower):
-                recommendations.append("Temporarily Close For Day")
-                reasons.append(reason)
-                summary_reasons.append(categorize_closure(lower))
-                deactivation_reason_id.append("67")
-                is_temp_deactivation.append(True)
-                confidence_scores.append(max(0.8, combine_confidence(parse_coverage, clarity)))
-                new_addresses.append("")
-                temp_duration.append(12)  # Regular temp closure = 12 hours
-                for day in bulk_hours:
-                    bulk_hours[day]["start"].append("")
-                    bulk_hours[day]["end"].append("")
-                continue
-
-            # PRIORITY 3: Only NOW check for hour changes (if no closures detected)
-            if "recommend" in lower and "change store hour" in lower:
-                # RELAXED: Only block if SEVERE quality issues
-                if has_severe_quality_issues:
+                # Temp closures need low clarity (0.75+)
+                if clarity < 0.75:
                     recommendations.append("No change")
-                    reasons.append("Severe image quality issues - hours completely unreadable")
-                    summary_reasons.append("Hours completely unreadable")
+                    reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
+                    summary_reasons.append("Clarity too low for temp closure")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
-                    confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                    confidence_scores.append(clarity)
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -475,13 +581,44 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                         bulk_hours[day]["end"].append("")
                     continue
                 
-                if any(p in lower for p in uncertain_phrases):
+                recommendations.append("Temporarily Close For Day")
+                reasons.append(reason)
+                summary_reasons.append(categorize_closure(lower))
+                deactivation_reason_id.append("67")
+                is_temp_deactivation.append(True)
+                confidence_scores.append(max(0.80, clarity))
+                new_addresses.append("")
+                temp_duration.append(12)  # Regular temp closure = 12 hours
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+                continue
+
+            # PRIORITY 3: Only NOW check for hour changes
+            if "recommend" in lower and "change store hour" in lower:
+                # Hour changes need HIGH clarity (0.90+) - must read exact times
+                if clarity < 0.90:
                     recommendations.append("No change")
-                    reasons.append("GPT suggested change but was uncertain")
-                    summary_reasons.append("GPT suggested change but was uncertain")
+                    reasons.append(f"Clarity of hours sign too low for hour changes ({clarity:.2f} < 0.90)")
+                    summary_reasons.append("Clarity too low for hour changes")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
-                    confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
+                # RELAXED: Only block if SEVERE quality issues
+                if has_severe_quality_issues:
+                    recommendations.append("No change")
+                    reasons.append("Severe image quality issues - hours completely unreadable")
+                    summary_reasons.append("Hours completely unreadable")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -507,7 +644,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                     summary_reasons.append("Too few days extracted to safely change hours")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
-                    confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                    confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -534,7 +671,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                     summary_reasons.append("Only minor/single-day time difference")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
-                    confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                    confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -547,7 +684,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                     summary_reasons.append("Posted hours differ from DoorDash hours")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
-                    confidence_scores.append(combine_confidence(parse_coverage, clarity))
+                    confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -557,12 +694,13 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places for how cle
                         bulk_hours[day]["end"].append(normalize_time(raw_end))
                     continue
 
+            # If we get here, no recommendation was made
             recommendations.append("No change")
             reasons.append(reason)
             summary_reasons.append("No change required")
             deactivation_reason_id.append("")
             is_temp_deactivation.append(False)
-            confidence_scores.append(combine_confidence(parse_coverage, clarity))
+            confidence_scores.append(clarity)
             new_addresses.append("")
             temp_duration.append("")
             for day in bulk_hours:
@@ -630,7 +768,7 @@ def create_bulk_upload_sheets(df):
             'store_id': temp_close_df['STORE_ID'].values,
             'deactivation_reason_id': 67,
             'is_temp_deactivation': 'TRUE',
-            'duration': temp_close_df['TEMP_DURATION'].values,  # Use dynamic duration
+            'duration': temp_close_df['TEMP_DURATION'].values,
             'notes': 'DRSC AI Tool marked as temp deactivate'
         })
     else:
@@ -699,7 +837,7 @@ def send_to_slack(df, timestamp_str):
         summary_parts.append(f"- Flag_New_Address: {len(address_change_bulk)} stores")
         summary_parts.append(f"- Bulk_Upload_Perm_Close: {len(perm_close_bulk)} stores")
         summary_parts.append(f"- Bulk_Upload_Temp_Close: {len(temp_close_bulk)} stores")
-        summary_parts.append(f"   (Note: Duration = 12 for regular closures, 700 for 'until further notice')")
+        summary_parts.append(f"   (Duration: 12 for regular closures, 700 for 'until further notice')")
         summary_parts.append(f"- Bulk_Upload_Change_Hours: {len(change_hours_bulk)} stores")
         
         summary = "\n".join(summary_parts)

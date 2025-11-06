@@ -311,7 +311,25 @@ def process_store_hours(df):
 You are reviewing a Dasher photo of a store entrance. CRITICAL: Check for closure and relocation signs FIRST before trying to read store hours.
 
 PRIORITY ORDER (check in this order):
-1) Is there a RELOCATION/ADDRESS CHANGE sign? BE VERY CONSERVATIVE - only flag if you see EXPLICIT text like "WE ARE MOVING TO [address]" or "NEW LOCATION: [address]" or "RELOCATED TO [address]"
+1) Is there a RELOCATION/ADDRESS CHANGE sign?
+
+CRITICAL - Address Change Detection Rules:
+✅ ONLY flag as "Address Change" if the sign EXPLICITLY says THIS STORE is moving:
+   - "WE ARE MOVING TO [new address]"
+   - "NEW LOCATION: [address]"
+   - "RELOCATED TO [address]"
+   - "OUR NEW ADDRESS IS [address]"
+   - "THIS STORE HAS MOVED TO [address]"
+   
+❌ DO NOT flag as "Address Change" if:
+   - Sign says "temporarily closed" + "visit another store near you" (this is NOT moving, just directing to other stores)
+   - Sign says "find a store locator" or "locate another store" (this is NOT moving)
+   - Sign says "reopen soon" or "will reopen" (this means SAME location will reopen, NOT moving)
+   - Sign directs to website to find OTHER stores (this is NOT moving, just customer service)
+   - Sign says "apologize for inconvenience" + visit other locations (this is temp closure, NOT moving)
+   
+"Address Change" means THIS SPECIFIC STORE is moving to a new address, NOT that customers should visit a different existing store.
+
 2) Is there a LONG-TERM TEMPORARY closure sign? (e.g., "Closed until further notice", "Temporarily closed until further notice")
 3) Is there a PERMANENT closure sign? (e.g., "permanently closing", "closed permanently")
 4) Is there a PAYMENT SYSTEM issue? (e.g., "CASH ONLY", "Registers Down", "No Credit Cards", "Card Reader Down")
@@ -319,7 +337,7 @@ PRIORITY ORDER (check in this order):
 6) Are the posted store hours clearly visible AND readable?
 
 Choose ONE recommendation:
-- **Address Change** - ONLY if you see VERY EXPLICIT signs like "WE ARE MOVING TO [new address]" or "NEW LOCATION: [address]" - be extremely conservative with this
+- **Address Change** - ONLY if THIS STORE is explicitly moving to a new address with the new address shown or clearly stated
 - **Temporarily Close For Day - Long Term** - If you see "closed until further notice" or "closed indefinitely" (no specific reopening date)
 - **Permanently Close Store** - ONLY if you see clear permanent closure signage
 - **Temporarily Close For Day** - If you see ANY of these:
@@ -331,7 +349,8 @@ Choose ONE recommendation:
 - **No Change** - If hours are completely unreadable OR match DoorDash hours
 
 IMPORTANT: 
-- For "Address Change", be EXTREMELY conservative - only flag if there is a clear sign explicitly stating the store is moving with a new address shown
+- For "Address Change", THIS STORE must be moving to a new address - not just directing customers to other stores
+- "Temporarily closed, visit another store" = Temp closure, NOT address change
 - "Closed until further notice" should be flagged as "Temporarily Close For Day - Long Term", NOT permanent closure
 - Payment issues like "Cash Only" or "Registers Down" should ALWAYS be flagged as "Temporarily Close For Day" because DoorDash requires card payments
 - Signs like "NO POWER" or "Open in 45 minutes" should be flagged as "Temporarily Close For Day"
@@ -339,7 +358,18 @@ IMPORTANT:
 
 Current DoorDash hours: {store_hours}
 
-If recommending changed hours, list the full weekly schedule clearly (e.g. Monday: 08:00 - 22:00).
+CRITICAL RULES FOR READING STORE HOURS:
+- You MUST be able to read BOTH opening time AND closing time for each day
+- If you can only see closing times (e.g., "Closes at 9 PM") but NOT opening times, DO NOT recommend "Change Store Hours"
+- If you can only see opening times but NOT closing times, DO NOT recommend "Change Store Hours"
+- Only recommend hour changes if BOTH opening and closing times are clearly visible for at least 4 days
+
+Examples of what NOT to do:
+❌ Sign shows "Closes at 9 PM" → DO NOT assume opening time → DO NOT recommend hour change
+❌ Sign shows "Open 8 AM" → DO NOT assume closing time → DO NOT recommend hour change
+✅ Sign shows "Monday: 8 AM - 9 PM" → Both times visible → Can recommend change
+
+If recommending changed hours, list the full weekly schedule with BOTH opening and closing times clearly (e.g. Monday: 08:00 - 22:00).
 
 If you detect an address change, include a line:
 New Address: [the new address if visible, or "Not shown" if not visible]
@@ -406,6 +436,45 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
 
             # PRIORITY 0: Check for ADDRESS CHANGE - VERY STRICT
             if is_address_change(result):
+                # Extra validation: make sure it's not just "visit another store" type language
+                false_positive_phrases = [
+                    "visit another store", "find another store", "locate another store",
+                    "temporarily closed", "will reopen", "reopen soon",
+                    "apologize for", "store near you", "store locator"
+                ]
+                
+                is_false_positive = any(phrase in lower for phrase in false_positive_phrases)
+                
+                if is_false_positive:
+                    # This is actually a temp closure, not address change
+                    if clarity < 0.75:
+                        recommendations.append("No change")
+                        reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
+                        summary_reasons.append("Clarity too low")
+                        deactivation_reason_id.append("")
+                        is_temp_deactivation.append(False)
+                        confidence_scores.append(clarity)
+                        new_addresses.append("")
+                        temp_duration.append("")
+                        for day in bulk_hours:
+                            bulk_hours[day]["start"].append("")
+                            bulk_hours[day]["end"].append("")
+                        continue
+                    
+                    # It's a temp closure
+                    recommendations.append("Temporarily Close For Day")
+                    reasons.append(reason)
+                    summary_reasons.append("Temporarily closed - directing customers to other stores")
+                    deactivation_reason_id.append("67")
+                    is_temp_deactivation.append(True)
+                    confidence_scores.append(max(0.80, clarity))
+                    new_addresses.append("")
+                    temp_duration.append(700)  # Long-term temp closure
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
                 # Address changes need highest clarity (0.92+)
                 if clarity < 0.92:
                     recommendations.append("No change")
@@ -619,6 +688,32 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+
+                # NEW: Validate we have BOTH opening AND closing times
+                incomplete_days = []
+                for day, times in posted.items():
+                    start = times.get("start", "")
+                    end = times.get("end", "")
+                    
+                    # Check if we have BOTH start and end, and both are valid times
+                    if not (start and end and re.match(r"^\d{2}:\d{2}:\d{2}$", start) and re.match(r"^\d{2}:\d{2}:\d{2}$", end)):
+                        incomplete_days.append(day)
+                
+                # If we have ANY incomplete days in what was extracted, this is suspicious
+                if incomplete_days and len(incomplete_days) == len(posted):
+                    # ALL days are incomplete (e.g., only closing times visible)
+                    recommendations.append("No change")
+                    reasons.append(f"Incomplete hours detected - can only see opening OR closing times, not both. Cannot safely update hours with partial data.")
+                    summary_reasons.append("Partial hours visible - need complete times")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity * 0.5)  # Lower confidence for partial data
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:

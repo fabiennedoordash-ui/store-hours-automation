@@ -143,8 +143,9 @@ def is_permanent_closure(text):
             return True
     
     if "store closing" in lower:
+        # REMOVED "thank you for" from this list
         permanent_context = [
-            "thank you for", "final", "last day", "we are closing",
+            "final", "last day", "we are closing",
             "location is closing", "this store is closing"
         ]
         if any(ctx in lower for ctx in permanent_context):
@@ -221,13 +222,10 @@ def process_store_hours(df):
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
     ]}
     
-    # Additional quality check phrases for hour changes
-    hour_quality_issues = [
-        "glare", "reflection", "reflective", "glaring", 
-        "distance", "background", "far away", "far from",
-        "difficult to read", "hard to read", "hard to make out",
-        "small text", "tiny", "difficult to see clearly",
-        "behind glass", "through window"
+    # RELAXED: Only check for severe quality issues
+    severe_quality_issues = [
+        "cannot read", "illegible", "unreadable", "too blurry",
+        "cannot make out", "unable to read"
     ]
     
     for i, row in tqdm(df.iterrows(), total=len(df)):
@@ -250,20 +248,19 @@ def process_store_hours(df):
 You are reviewing a Dasher photo of a store entrance. CRITICAL: Check for closure signs FIRST before trying to read store hours.
 
 PRIORITY ORDER (check in this order):
-1) Is there a PERMANENT closure sign? (e.g., "permanently closing", "closed permanently", "thank you for your support")
+1) Is there a PERMANENT closure sign? (e.g., "permanently closing", "closed permanently")
 2) Is there a TEMPORARY closure sign? (e.g., "POWER OUT", "closed due to weather", "system down", "maintenance", "closed today")
 3) Are the posted store hours clearly visible AND readable?
 
 Choose ONE recommendation:
 - **Permanently Close Store** - ONLY if you see clear permanent closure signage
 - **Temporarily Close For Day** - If you see ANY temporary closure sign (power out, maintenance, weather, system issues, etc.) - DO NOT try to read hours if this applies
-- **Change Store Hours** - ONLY if there are NO closure signs AND the hours are clearly readable (clarity > 0.9) AND not affected by glare/reflection/distance
-- **No Change** - If hours are blurry/unreadable OR match DoorDash hours OR affected by glare/reflection
+- **Change Store Hours** - If there are NO closure signs AND you can read the hours with reasonable confidence
+- **No Change** - If hours are completely unreadable OR match DoorDash hours
 
 IMPORTANT: 
 - If you see a "POWER OUT", "CLOSED", or any temporary closure sign, recommend "Temporarily Close For Day" and DO NOT attempt to extract store hours from the background.
-- If the hours are visible but have ANY of these issues, recommend "No Change": glare, reflection, far away in background, behind glass with reflections, small/hard to read text
-- Be honest if you're having ANY difficulty reading the exact times due to image quality issues like glare, reflection, distance, or if the hours are in the background behind glass
+- Only recommend "No Change" if you literally CANNOT read the hours at all or if they match DoorDash hours
 
 Current DoorDash hours: {store_hours}
 
@@ -271,7 +268,7 @@ If recommending changed hours, list the full weekly schedule clearly (e.g. Monda
 
 Provide this line at the end:
 Clarity score: X
-Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible. If there's a closure sign, rate that sign's clarity. For hours, consider if glare/reflection/distance affects readability.
+Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible.
 """
         prompt += "\nAssume store closing times like '10:00' or '12:00' without AM/PM are in the evening (PM)."
 
@@ -295,7 +292,7 @@ Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible. 
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
 
-            # If clarity is too low, skip
+            # Keep clarity threshold at 0.9
             if clarity < 0.9:
                 recommendations.append("No change")
                 reasons.append("Clarity too low (<0.9), skipping recommendation")
@@ -321,8 +318,8 @@ Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible. 
                     bulk_hours[day]["end"].append("")
                 continue
 
-            # NEW: Check for image quality issues that affect hour readability
-            has_quality_issues = any(phrase in lower for phrase in hour_quality_issues)
+            # RELAXED: Only check for SEVERE quality issues
+            has_severe_quality_issues = any(phrase in lower for phrase in severe_quality_issues)
 
             # PRIORITY 1: Check for PERMANENT closure
             if "permanently close" in lower and is_permanent_closure(result):
@@ -368,11 +365,11 @@ Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible. 
 
             # PRIORITY 3: Only NOW check for hour changes (if no closures detected)
             if "recommend" in lower and "change store hour" in lower:
-                # NEW: Block hour changes if quality issues detected
-                if has_quality_issues:
+                # RELAXED: Only block if SEVERE quality issues
+                if has_severe_quality_issues:
                     recommendations.append("No change")
-                    reasons.append("Image quality issues detected (glare/reflection/distance) - skipping hour change")
-                    summary_reasons.append("Image quality issues for hour extraction")
+                    reasons.append("Severe image quality issues - hours completely unreadable")
+                    summary_reasons.append("Hours completely unreadable")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
                     confidence_scores.append(combine_confidence(parse_coverage, clarity))
@@ -404,9 +401,10 @@ Where X is a number between 0.0 and 1.0 for how clearly ANY signage is visible. 
                         posted = {day: {"start": same_start, "end": same_end} for day in bulk_hours}
                         parse_coverage = confidence_from_hours(posted)
 
-                if len(posted) < 5:
+                # RELAXED: Reduce from 5 days to 4 days minimum
+                if len(posted) < 4:
                     recommendations.append("No change")
-                    reasons.append("Too few days extracted to safely change hours (>=5 required)")
+                    reasons.append("Too few days extracted to safely change hours (>=4 required)")
                     summary_reasons.append("Too few days extracted to safely change hours")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)

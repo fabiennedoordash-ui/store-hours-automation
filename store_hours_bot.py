@@ -779,7 +779,6 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
 
             # NEW: Extract special holiday hours
             special_hours_extracted = extract_special_hours(result)
-            special_hours_list.append(special_hours_extracted)
 
             posted = extract_hours(result)
             parse_coverage = confidence_from_hours(posted)
@@ -791,6 +790,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append("Model expressed uncertainty")
                 summary_reasons.append("Image unreadable or GPT uncertain")
                 deactivation_reason_id.append("")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(False)
                 confidence_scores.append(0.20)
                 new_addresses.append("")
@@ -821,6 +821,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
                         summary_reasons.append("Clarity too low")
                         deactivation_reason_id.append("")
+                        special_hours_list.append(special_hours_extracted)
                         is_temp_deactivation.append(False)
                         confidence_scores.append(clarity)
                         new_addresses.append("")
@@ -835,6 +836,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(reason)
                     summary_reasons.append("Temporarily closed - directing customers to other stores")
                     deactivation_reason_id.append("67")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(True)
                     confidence_scores.append(max(0.80, clarity))
                     new_addresses.append("")
@@ -850,6 +852,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of relocation sign too low ({clarity:.2f} < 0.92)")
                     summary_reasons.append("Clarity too low for address change")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -870,6 +873,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(reason)
                     summary_reasons.append("Store relocation/address change detected")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(max(0.85, clarity))
                     new_addresses.append(new_addr)
@@ -887,6 +891,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for long-term closure")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -900,6 +905,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append("Closed until further notice")
                 deactivation_reason_id.append("67")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.85, clarity))
                 new_addresses.append("")
@@ -917,6 +923,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of permanent closure sign too low ({clarity:.2f} < 0.85)")
                     summary_reasons.append("Clarity too low for permanent closure")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -930,6 +937,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append("Permanent closure detected")
                 deactivation_reason_id.append("23")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(False)
                 confidence_scores.append(0.95)
                 new_addresses.append("")
@@ -947,6 +955,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of payment issue sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for payment issue")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -960,6 +969,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append("Payment issue")
                 deactivation_reason_id.append("67")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
@@ -978,6 +988,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for temp closure")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -991,6 +1002,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append(categorize_closure(lower))
                 deactivation_reason_id.append("67")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
@@ -1011,6 +1023,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for temp closure")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1024,6 +1037,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append(categorize_closure(lower))
                 deactivation_reason_id.append("67")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
@@ -1041,6 +1055,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of hours sign too low for hour changes ({clarity:.2f} < 0.90)")
                     summary_reasons.append("Clarity too low for hour changes")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1056,6 +1071,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("⚠️ HALLUCINATION DETECTED: High confidence hours but no sign location described or explicitly states hours not visible. Likely fabricated.")
                     summary_reasons.append("Hours likely hallucinated - no visible sign")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(0.1)  # Very low confidence for hallucination
                     new_addresses.append("")
@@ -1071,6 +1087,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("Severe image quality issues - hours completely unreadable")
                     summary_reasons.append("Hours completely unreadable")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1097,6 +1114,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Incomplete hours detected - can only see opening OR closing times, not both. Cannot safely update hours with partial data.")
                     summary_reasons.append("Partial hours visible - need complete times")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity * 0.5)  # Lower confidence for partial data
                     new_addresses.append("")
@@ -1123,6 +1141,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("Too few days extracted to safely change hours (>=4 required)")
                     summary_reasons.append("Too few days extracted to safely change hours")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
@@ -1151,6 +1170,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("Posted hours match current DoorDash hours - no change needed")
                     summary_reasons.append("Hours match current store hours")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
@@ -1169,6 +1189,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         reasons.append("Only 1 day differs with low confidence ({:.2f}) - likely OCR error, not flagging".format(overall_confidence))
                         summary_reasons.append("Only minor/single-day time difference (low confidence)")
                         deactivation_reason_id.append("")
+                        special_hours_list.append(special_hours_extracted)
                         is_temp_deactivation.append(False)
                         confidence_scores.append(overall_confidence)
                         new_addresses.append("")
@@ -1183,6 +1204,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         reasons.append(reason)
                         summary_reasons.append("Posted hours differ from DoorDash hours (high confidence single-day change)")
                         deactivation_reason_id.append("")
+                        special_hours_list.append(special_hours_extracted)
                         is_temp_deactivation.append(False)
                         confidence_scores.append(overall_confidence)
                         new_addresses.append("")
@@ -1199,6 +1221,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(reason)
                     summary_reasons.append("Posted hours differ from DoorDash hours")
                     deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
                     is_temp_deactivation.append(False)
                     confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
@@ -1216,6 +1239,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append(reason)
                 summary_reasons.append("No change required (special hours detected)")
                 deactivation_reason_id.append("")
+                special_hours_list.append(special_hours_extracted)
                 is_temp_deactivation.append(False)
                 confidence_scores.append(clarity)
                 new_addresses.append("")
@@ -1230,6 +1254,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             reasons.append(reason)
             summary_reasons.append("No change required")
             deactivation_reason_id.append("")
+            special_hours_list.append(special_hours_extracted)
             is_temp_deactivation.append(False)
             confidence_scores.append(clarity)
             new_addresses.append("")
@@ -1247,10 +1272,14 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             confidence_scores.append(0.0)
             new_addresses.append("")
             temp_duration.append("")
-            special_hours_list.append([])  # NEW
+            special_hours_list.append([])
             for day in bulk_hours:
                 bulk_hours[day]["start"].append("")
                 bulk_hours[day]["end"].append("")
+    
+    # Verify lengths match before assigning
+    assert len(recommendations) == len(df), f"Mismatch: {len(recommendations)} vs {len(df)}"
+    assert len(special_hours_list) == len(df), f"Special hours mismatch: {len(special_hours_list)} vs {len(df)}"
     
     df["RECOMMENDATION"] = recommendations
     df["REASON"] = reasons
@@ -1260,7 +1289,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
     df["CONFIDENCE_SCORE"] = confidence_scores
     df["NEW_ADDRESS"] = new_addresses
     df["TEMP_DURATION"] = temp_duration
-    df["SPECIAL_HOURS_RAW"] = special_hours_list  # NEW: Store raw special hours data
+    df["SPECIAL_HOURS_RAW"] = special_hours_list
 
     for day in bulk_hours:
         df[f"start_time_{day}"] = bulk_hours[day]["start"]

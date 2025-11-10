@@ -148,53 +148,191 @@ def extract_hours(text):
     return hours
 
 def extract_special_hours(text):
-    """Extract special holiday hours from text like 'Thanksgiving: Closed' or 'Black Friday: 8:00 am - 9:00 pm'"""
+    """Extract special holiday hours from text. Looks for SPECIAL HOLIDAY HOURS: section"""
     special_hours = []
-    lower = text.lower()
     
-    # Match patterns like "Holiday: closed" or "Holiday: 8:00 am - 9:00 pm"
-    holiday_pattern = r"((?:thanksgiving|black friday|christmas|new year|easter|labor day|memorial day|july 4|independence day|halloween|cyber monday|mother's day|father's day|valentine's day|st\. patrick).*?):\s*(closed|no operating hours|no hours|(\d{1,2}:\d{2}(?:\s*[ap]m)?)\s*[-–]\s*(\d{1,2}:\d{2}(?:\s*[ap]m)?))"
+    # First, try to find the SPECIAL HOLIDAY HOURS: section
+    special_section_match = re.search(
+        r'SPECIAL\s+HOLIDAY\s+HOURS\s*:\s*(.*?)(?:\n\n|\Z)',
+        text,
+        re.IGNORECASE | re.DOTALL
+    )
     
-    for match in re.finditer(holiday_pattern, text, re.IGNORECASE):
-        holiday_name = match.group(1).strip()
-        time_info = match.group(2).strip()
+    if not special_section_match:
+        # Fallback: search the entire text line by line (for cases where format isn't perfect)
+        lines = text.split('\n')
+    else:
+        # Parse from the special section
+        section_text = special_section_match.group(1)
+        lines = section_text.split('\n')
+    
+    # Holiday patterns - ORDER MATTERS! Check specific holidays (with "Eve") BEFORE generic ones
+    holidays_to_check = [
+        ('thanksgiving', ['thanksgiving']),
+        ('black friday', ['black friday']),
+        ('christmas eve', ['christmas eve', "christmas's eve"]),
+        ('christmas day', ['christmas day']),
+        ('christmas', ['christmas']),
+        ("new year's eve", ["new year's eve", 'new years eve', 'new year eve']),
+        ("new year's day", ["new year's day", 'new years day', 'new year day']),
+        ('easter', ['easter']),
+        ('labor day', ['labor day']),
+        ('memorial day', ['memorial day']),
+        ('july 4th', ['july 4th', 'july 4', 'independence day']),
+        ('halloween', ['halloween']),
+        ('cyber monday', ['cyber monday']),
+        ("mother's day", ["mother's day", 'mothers day']),
+        ("father's day", ["father's day", 'fathers day']),
+        ("valentine's day", ["valentine's day", 'valentines day']),
+        ("st. patrick's day", ["st. patrick's day", 'st. patrick', "patrick's day"]),
+    ]
+    
+    for line in lines:
+        if not line.strip() or ':' not in line:
+            continue
+        
+        lower_line = line.lower()
+        
+        # Find which holiday is in this line
+        found_holiday = None
+        for canonical_name, keywords in holidays_to_check:
+            for keyword in keywords:
+                if keyword in lower_line:
+                    found_holiday = canonical_name
+                    break
+            if found_holiday:
+                break
+        
+        if not found_holiday:
+            continue
+        
+        # Extract the part after the colon
+        parts = line.split(':', 1)
+        if len(parts) < 2:
+            continue
+        
+        status_part = parts[1].strip()
         
         # Check if closed
-        is_closed = any(phrase in time_info.lower() for phrase in ["closed", "no operating", "no hours"])
-        
-        if is_closed:
+        if any(phrase in status_part.lower() for phrase in ['closed', 'close at', 'closes at', 'no operating', 'no hours']):
             special_hours.append({
-                'holiday': holiday_name,
+                'holiday': found_holiday,
                 'is_open': 'no',
                 'start_time': '',
                 'end_time': ''
             })
-        else:
-            # Try to parse the time
-            try:
-                start_time = match.group(3)
-                end_time = match.group(4)
-                
-                if start_time and end_time:
-                    start_clean = start_time.strip().lower().replace(" ", "")
-                    end_clean = end_time.strip().lower().replace(" ", "")
+            continue
+        
+        # Try to parse times
+        # Handle formats like: 
+        # - "09:00-14:00" (24-hour, primary format)
+        # - "9:00-14:00"
+        # - "Open-4PM", "09:00-16:00"
+        # - "8:00 AM - 9:00 PM" (legacy 12-hour format)
+        
+        # First, normalize to 24-hour format if using AM/PM
+        if 'am' in status_part.lower() or 'pm' in status_part.lower():
+            # Remove "open" prefix and normalize
+            time_str = re.sub(r'^\s*open\s*[-–]?\s*', '', status_part, flags=re.IGNORECASE).strip()
+            
+            # Try full time range: "8:00 AM - 9:00 PM" or "8AM-9PM"
+            full_range_match = re.search(
+                r'(\d{1,2}):?(\d{2})?\s*([ap]m)?\s*[-–]\s*(\d{1,2}):?(\d{2})?\s*([ap]m)?',
+                time_str,
+                re.IGNORECASE
+            )
+            
+            if full_range_match:
+                try:
+                    s_hr, s_min, s_ap, e_hr, e_min, e_ap = full_range_match.groups()
+                    s_min = s_min or '00'
+                    e_min = e_min or '00'
                     
-                    if not ("am" in start_clean or "pm" in start_clean):
-                        start_clean += "am"
-                    if not ("am" in end_clean or "pm" in end_clean):
-                        end_clean += "pm"
+                    # Smart AM/PM assignment
+                    if not s_ap and not e_ap:
+                        s_ap = 'am'
+                        e_ap = 'pm'
+                    elif not s_ap:
+                        s_ap = e_ap
+                    elif not e_ap:
+                        e_ap = 'pm' if int(e_hr) < int(s_hr) else s_ap
                     
-                    start_formatted = datetime.datetime.strptime(start_clean, "%I:%M%p").strftime("%H:%M")
-                    end_formatted = datetime.datetime.strptime(end_clean, "%I:%M%p").strftime("%H:%M")
+                    start_dt = datetime.datetime.strptime(f"{s_hr}:{s_min}{s_ap}".lower(), "%I:%M%p")
+                    end_dt = datetime.datetime.strptime(f"{e_hr}:{e_min}{e_ap}".lower(), "%I:%M%p")
                     
                     special_hours.append({
-                        'holiday': holiday_name,
+                        'holiday': found_holiday,
                         'is_open': 'yes',
-                        'start_time': start_formatted,
-                        'end_time': end_formatted
+                        'start_time': start_dt.strftime("%H:%M"),
+                        'end_time': end_dt.strftime("%H:%M")
                     })
-            except:
-                pass
+                    continue
+                except:
+                    pass
+            
+            # Try single time (closing time only): "4PM", "4 PM"
+            single_time_match = re.search(
+                r'(\d{1,2}):?(\d{2})?\s*([ap]m)?',
+                time_str,
+                re.IGNORECASE
+            )
+            
+            if single_time_match:
+                try:
+                    hr, minute, ap = single_time_match.groups()
+                    minute = minute or '00'
+                    ap = ap or 'pm'
+                    
+                    end_dt = datetime.datetime.strptime(f"{hr}:{minute}{ap}".lower(), "%I:%M%p")
+                    
+                    special_hours.append({
+                        'holiday': found_holiday,
+                        'is_open': 'yes',
+                        'start_time': '09:00',
+                        'end_time': end_dt.strftime("%H:%M")
+                    })
+                    continue
+                except:
+                    pass
+        else:
+            # Try 24-hour format: "09:00-14:00" or "9:00-14:00"
+            time_24h_match = re.search(
+                r'(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})',
+                status_part
+            )
+            
+            if time_24h_match:
+                try:
+                    s_hr, s_min, e_hr, e_min = time_24h_match.groups()
+                    start_dt = datetime.datetime.strptime(f"{s_hr}:{s_min}", "%H:%M")
+                    end_dt = datetime.datetime.strptime(f"{e_hr}:{e_min}", "%H:%M")
+                    
+                    special_hours.append({
+                        'holiday': found_holiday,
+                        'is_open': 'yes',
+                        'start_time': start_dt.strftime("%H:%M"),
+                        'end_time': end_dt.strftime("%H:%M")
+                    })
+                    continue
+                except:
+                    pass
+            
+            # Try single 24-hour time: "14:00"
+            single_24h_match = re.search(r'(\d{1,2}):(\d{2})', status_part)
+            if single_24h_match:
+                try:
+                    hr, minute = single_24h_match.groups()
+                    end_dt = datetime.datetime.strptime(f"{hr}:{minute}", "%H:%M")
+                    
+                    special_hours.append({
+                        'holiday': found_holiday,
+                        'is_open': 'yes',
+                        'start_time': '09:00',
+                        'end_time': end_dt.strftime("%H:%M")
+                    })
+                    continue
+                except:
+                    pass
     
     return special_hours
 
@@ -349,11 +487,56 @@ def is_payment_issue(text):
     lower = text.lower()
     return any(phrase in lower for phrase in payment_issue_phrases)
 
-def is_address_change(text):
-    """Check if the text indicates an address change/relocation - VERY STRICT"""
+def is_hours_hallucination(text, extracted_hours_count):
+    """Detect if GPT hallucinated store hours without actually seeing them in the image"""
     lower = text.lower()
-    # Must have very explicit phrases
-    return any(phrase in lower for phrase in address_change_phrases)
+    
+    # Red flags for hallucination
+    hallucination_indicators = [
+        "no store hours visible",
+        "cannot see store hours",
+        "unable to read store hours",
+        "no hours sign",
+        "hours not visible",
+        "no posted hours"
+    ]
+    
+    # If GPT explicitly says no hours are visible, but extracted hours anyway, that's hallucination
+    if any(indicator in lower for indicator in hallucination_indicators):
+        if extracted_hours_count > 0:
+            return True
+    
+    # Positive indicators that GPT actually found hours
+    location_phrases = [
+        "on the door",
+        "on the window",
+        "on the wall",
+        "posted on",
+        "sign shows",
+        "sign reads",
+        "sign displays",
+        "visible on",
+        "displayed on",
+        "laminated",
+        "chalkboard",
+        "digital display",
+        "next to",
+        "above the",
+        "below the",
+        "frame",
+        "entrance",
+        "quote:",
+        "says:",
+        "reads:"
+    ]
+    
+    has_location_description = any(phrase in lower for phrase in location_phrases)
+    
+    # If high hours extraction but no location description, suspicious
+    if extracted_hours_count >= 4 and not has_location_description:
+        return True
+    
+    return False
 
 # ============= FUNCTION 1: GET DATA FROM MODE =============
 def get_mode_data():
@@ -515,23 +698,46 @@ CRITICAL RULES FOR READING STORE HOURS:
 - If you can only see opening times but NOT closing times, DO NOT recommend "Change Store Hours"
 - Only recommend hour changes if BOTH opening and closing times are clearly visible for at least 4 days
 
+CRITICAL - IF YOU ARE READING STORE HOURS, YOU MUST ALSO:
+1. Describe the physical location of the hours sign (e.g., "on the door frame", "posted on the window", "on the wall next to the entrance")
+2. Describe what the sign looks like (e.g., "laminated white sign", "chalkboard", "digital display")
+3. Quote the exact text you see (e.g., "Monday-Friday 9:00 AM - 9:00 PM")
+4. If you CANNOT see hours at all, clearly state: "NO STORE HOURS VISIBLE"
+
 Examples of what NOT to do:
 ❌ Sign shows "Closes at 9 PM" → DO NOT assume opening time → DO NOT recommend hour change
 ❌ Sign shows "Open 8 AM" → DO NOT assume closing time → DO NOT recommend hour change
-✅ Sign shows "Monday: 8 AM - 9 PM" → Both times visible → Can recommend change
+❌ Extract hours without describing where the sign is located (likely hallucination)
+✅ Sign shows "Monday: 8 AM - 9 PM" on a white sign next to the door → Both times visible → Can recommend change
+✅ State clearly: "NO STORE HOURS VISIBLE on this storefront"
 
 If recommending changed hours, list the full weekly schedule with BOTH opening and closing times clearly (e.g. Monday: 08:00 - 22:00).
 
 If you detect an address change, include a line:
 New Address: [the new address if visible, or "Not shown" if not visible]
 
+CRITICAL - SPECIAL HOLIDAY HOURS AT END:
+If you see special hours for any holidays, you MUST include a separate section at the very end of your response (after Clarity score) with each holiday on its own line:
+
 SPECIAL HOLIDAY HOURS:
-If you see special hours for upcoming holidays, list them in this format:
-Special Holiday Hours:
-- [Holiday Name]: [CLOSED or HH:MM - HH:MM]
-Example:
-- Thanksgiving: CLOSED
-- Black Friday: 08:00 - 21:00
+[Holiday Name]: [CLOSED or HH:MM-HH:MM]
+
+Examples:
+SPECIAL HOLIDAY HOURS:
+Thanksgiving: Closed
+Christmas Eve: Open-14:00
+Christmas Day: Closed
+New Year's Eve: Open-19:00
+New Year's Day: Closed
+
+CRITICAL RULES FOR SPECIAL HOURS:
+- Each holiday on a separate line
+- Use exact holiday names: "Thanksgiving", "Christmas Eve", "New Year's Eve", "Christmas Day", "New Year's Day", "Black Friday", etc.
+- Time format: Use 24-hour format (14:00 not 2:00 PM)
+- For closed stores: write "Closed" not "Close at X" or "Closes at X"
+- For open stores: write the full range "HH:MM-HH:MM" or if only closing time known, write "09:00-HH:MM"
+- This section MUST be at the very end of your response after the Clarity score
+- Do NOT include dates or day-of-week info, just the time
 
 CRITICAL - CLARITY SCORING INSTRUCTIONS:
 Rate clarity based ONLY on the specific sign relevant to your recommendation:
@@ -764,7 +970,8 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 continue
 
             # PRIORITY 2: Check for regular TEMPORARY closure
-            if "temporarily close" in lower or "special hour" in lower:
+            # IMPORTANT: Don't flag as temp closure if GPT already recommended "No Change" (special hours only)
+            if "temporarily close" in lower and "recommendation: **no change**" not in lower:
                 # Temp closures need low clarity (0.75+) - closure signs usually clear
                 if clarity < 0.75:
                     recommendations.append("No change")
@@ -836,6 +1043,21 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
+                
+                # NEW: Check for hallucination (GPT making up hours)
+                if is_hours_hallucination(result, len(posted)):
+                    recommendations.append("No change")
+                    reasons.append("⚠️ HALLUCINATION DETECTED: High confidence hours but no sign location described or explicitly states hours not visible. Likely fabricated.")
+                    summary_reasons.append("Hours likely hallucinated - no visible sign")
+                    deactivation_reason_id.append("")
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(0.1)  # Very low confidence for hallucination
                     new_addresses.append("")
                     temp_duration.append("")
                     for day in bulk_hours:
@@ -922,11 +1144,12 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     else:
                         diff_days += 1
 
-                # Only flag as "Change Store Hours" if at least 2 days differ
-                if diff_days < 2:
+                # Decide whether to flag based on days that differ AND confidence
+                if diff_days == 0:
+                    # All days match - hours are correct
                     recommendations.append("No change")
-                    reasons.append("Only 1 day differs - likely OCR error, not flagging")
-                    summary_reasons.append("Only minor/single-day time difference")
+                    reasons.append("Posted hours match current DoorDash hours - no change needed")
+                    summary_reasons.append("Hours match current store hours")
                     deactivation_reason_id.append("")
                     is_temp_deactivation.append(False)
                     confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
@@ -936,7 +1159,42 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
                     continue
+                elif diff_days == 1:
+                    # Only 1 day differs - decide based on confidence
+                    overall_confidence = hour_change_confidence(parse_coverage, clarity)
+                    
+                    if overall_confidence < 0.85:
+                        # Low confidence - likely OCR error
+                        recommendations.append("No change")
+                        reasons.append("Only 1 day differs with low confidence ({:.2f}) - likely OCR error, not flagging".format(overall_confidence))
+                        summary_reasons.append("Only minor/single-day time difference (low confidence)")
+                        deactivation_reason_id.append("")
+                        is_temp_deactivation.append(False)
+                        confidence_scores.append(overall_confidence)
+                        new_addresses.append("")
+                        temp_duration.append("")
+                        for day in bulk_hours:
+                            bulk_hours[day]["start"].append("")
+                            bulk_hours[day]["end"].append("")
+                        continue
+                    else:
+                        # High confidence - flag for change even with 1 day difference
+                        recommendations.append("Change Store Hours")
+                        reasons.append(reason)
+                        summary_reasons.append("Posted hours differ from DoorDash hours (high confidence single-day change)")
+                        deactivation_reason_id.append("")
+                        is_temp_deactivation.append(False)
+                        confidence_scores.append(overall_confidence)
+                        new_addresses.append("")
+                        temp_duration.append("")
+                        for day in bulk_hours:
+                            raw_start = posted.get(day, {}).get("start", "")
+                            raw_end = posted.get(day, {}).get("end", "")
+                            bulk_hours[day]["start"].append(normalize_time(raw_start))
+                            bulk_hours[day]["end"].append(normalize_time(raw_end))
+                        continue
                 else:
+                    # 2+ days differ - recommend change
                     recommendations.append("Change Store Hours")
                     reasons.append(reason)
                     summary_reasons.append("Posted hours differ from DoorDash hours")
@@ -952,7 +1210,22 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         bulk_hours[day]["end"].append(normalize_time(raw_end))
                     continue
 
-            # If we get here, no recommendation was made
+            # If we get here, check if GPT explicitly recommended "No Change"
+            if "recommendation: **no change**" in lower or "recommendation: no change" in lower:
+                recommendations.append("No change")
+                reasons.append(reason)
+                summary_reasons.append("No change required (special hours detected)")
+                deactivation_reason_id.append("")
+                is_temp_deactivation.append(False)
+                confidence_scores.append(clarity)
+                new_addresses.append("")
+                temp_duration.append("")
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+                continue
+            
+            # If we get here, no recommendation was made by GPT
             recommendations.append("No change")
             reasons.append(reason)
             summary_reasons.append("No change required")

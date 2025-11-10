@@ -98,6 +98,179 @@ holiday_keywords = {
     "st. patrick's day": ["st. patrick", "patrick's day"]
 }
 
+# ============= HOUR NORMALIZATION FUNCTIONS =============
+
+def time_to_minutes(time_str):
+    """Convert HH:MM or H:MM to minutes since midnight"""
+    if not time_str or pd.isna(time_str):
+        return None
+    try:
+        time_str = str(time_str).strip()
+        # Handle various formats
+        if ':' in time_str:
+            parts = time_str.split(':')
+            hours = int(parts[0])
+            minutes = int(parts[1][:2])  # Take first 2 chars in case of formatting issues
+            return hours * 60 + minutes
+    except:
+        return None
+    return None
+
+def normalize_weekly_hours(doordash_hours_dict):
+    """
+    Normalize DoorDash weekly hours into canonical format
+    Input: dict like {'monday': '07:00 - 22:00', ...}
+    Output: dict like {'monday': [(420, 1320)], ...}  # as list of (start_min, end_min) tuples
+    """
+    normalized = {}
+    
+    for day, hours_str in doordash_hours_dict.items():
+        if pd.isna(hours_str) or not hours_str:
+            normalized[day] = []
+            continue
+            
+        try:
+            hours_str = str(hours_str).strip()
+            ranges = []
+            
+            # Split by comma in case of multiple ranges
+            time_ranges = hours_str.split(',')
+            
+            for time_range in time_ranges:
+                time_range = time_range.strip()
+                if ' - ' in time_range or '-' in time_range:
+                    # Split on dash
+                    if ' - ' in time_range:
+                        start_str, end_str = time_range.split(' - ')
+                    else:
+                        parts = time_range.split('-')
+                        start_str, end_str = parts[0], parts[1]
+                    
+                    start_min = time_to_minutes(start_str.strip())
+                    end_min = time_to_minutes(end_str.strip())
+                    
+                    if start_min is not None and end_min is not None:
+                        ranges.append((start_min, end_min))
+            
+            normalized[day] = ranges
+        except:
+            normalized[day] = []
+    
+    return normalized
+
+def normalize_posted_hours(posted_hours_text):
+    """
+    Normalize posted store hours from sign text
+    Input: "Monday - Friday: 5:00 AM - 10:00 PM, Saturday: 6:00 AM - 11:00 PM"
+    Output: dict like {'monday': [(300, 1320)], ...}
+    """
+    normalized = {}
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    
+    # Initialize all days as empty
+    for day in days:
+        normalized[day] = []
+    
+    try:
+        posted_hours_text = str(posted_hours_text).lower()
+        
+        # Try to parse individual day patterns
+        day_pattern = r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)[:\s-]*([0-9]{1,2}:[0-9]{2})\s*(?:am|pm|a\.m\.|p\.m\.)?\s*[-–]\s*([0-9]{1,2}:[0-9]{2})\s*(?:am|pm|a\.m\.|p\.m\.)?'
+        
+        for match in re.finditer(day_pattern, posted_hours_text):
+            day = match.group(1).lower()
+            start_str = match.group(2)
+            end_str = match.group(3)
+            
+            start_min = time_to_minutes(start_str)
+            end_min = time_to_minutes(end_str)
+            
+            if start_min is not None and end_min is not None:
+                normalized[day].append((start_min, end_min))
+        
+        # Try to parse range like "Monday - Friday: ..." 
+        if not any(normalized.values()):
+            range_pattern = r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*[-–]\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)[:\s]*([0-9]{1,2}:[0-9]{2})\s*[-–]\s*([0-9]{1,2}:[0-9]{2})'
+            
+            for match in re.finditer(range_pattern, posted_hours_text):
+                start_day = days.index(match.group(1).lower())
+                end_day = days.index(match.group(2).lower())
+                start_str = match.group(3)
+                end_str = match.group(4)
+                
+                start_min = time_to_minutes(start_str)
+                end_min = time_to_minutes(end_str)
+                
+                if start_min is not None and end_min is not None:
+                    for i in range(start_day, end_day + 1):
+                        normalized[days[i]].append((start_min, end_min))
+    
+    except Exception as e:
+        print(f"Error normalizing posted hours: {e}")
+    
+    return normalized
+
+def hours_match_strict(doordash_normalized, posted_normalized):
+    """
+    Compare normalized hours and return True if they match
+    Handles split hours like (00:00-02:00, 05:00-23:59) = (05:00-02:00)
+    This is the improved comparison that recognizes when hours already match
+    """
+    try:
+        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        
+        for day in days:
+            dd_ranges = doordash_normalized.get(day, [])
+            posted_ranges = posted_normalized.get(day, [])
+            
+            # Convert to comparable sets
+            dd_set = set(dd_ranges) if dd_ranges else set()
+            posted_set = set(posted_ranges) if posted_ranges else set()
+            
+            # If both are empty, they match
+            if not dd_set and not posted_set:
+                continue
+            
+            # If one is empty and the other isn't, they don't match
+            if bool(dd_set) != bool(posted_set):
+                return False
+            
+            # If sets don't match exactly, they don't match
+            if dd_set != posted_set:
+                return False
+        
+        return True
+    except Exception as e:
+        print(f"Error comparing hours: {e}")
+        return False
+
+def should_recommend_hour_change(dd_hours_dict, posted_hours_text, clarity_score):
+    """
+    Determine if we should recommend changing hours
+    Returns: (should_change, reason)
+    
+    Key improvement: Recognizes when hours already match and does NOT recommend change
+    This prevents false positives like the Safeway example where hours already match
+    """
+    try:
+        # Need clarity to make a recommendation
+        if not clarity_score or clarity_score < 0.7:
+            return False, "Low clarity score"
+        
+        # Normalize both
+        dd_normalized = normalize_weekly_hours(dd_hours_dict)
+        posted_normalized = normalize_posted_hours(posted_hours_text)
+        
+        # Check if they match
+        if hours_match_strict(dd_normalized, posted_normalized):
+            return False, "Posted hours already match DoorDash hours"
+        else:
+            return True, "Posted hours differ from DoorDash hours"
+    
+    except Exception as e:
+        print(f"Error in should_recommend_hour_change: {e}")
+        return False, f"Error comparing hours: {str(e)}"
+
 # ============= HELPER FUNCTIONS =============
 def categorize_closure(text):
     lower = text.lower()
@@ -137,21 +310,83 @@ def extract_hours(text):
             else:
                 e = datetime.datetime.strptime(end_clean, "%I:%M%p").strftime("%H:%M:%S")
             s = datetime.datetime.strptime(start_clean, "%I:%M%p").strftime("%H:%M:%S")
-            hours[day.lower()] = {"start": s, "end": e}
+            
+            day_lower = day.lower()
+            
+            # NEW: Handle split shifts (multiple entries per day)
+            # If this day already exists, store as a list of shifts
+            if day_lower in hours:
+                # Convert to list if not already
+                if isinstance(hours[day_lower], dict):
+                    hours[day_lower] = [hours[day_lower]]
+                hours[day_lower].append({"start": s, "end": e})
+            else:
+                hours[day_lower] = {"start": s, "end": e}
         except:
             try:
                 s = datetime.datetime.strptime(start.strip(), "%H:%M").strftime("%H:%M:%S")
                 e = datetime.datetime.strptime(end.strip(), "%H:%M").strftime("%H:%M:%S")
-                hours[day.lower()] = {"start": s, "end": e}
+                
+                day_lower = day.lower()
+                if day_lower in hours:
+                    if isinstance(hours[day_lower], dict):
+                        hours[day_lower] = [hours[day_lower]]
+                    hours[day_lower].append({"start": s, "end": e})
+                else:
+                    hours[day_lower] = {"start": s, "end": e}
             except:
                 continue
     return hours
 
+def hours_match_allowing_split(posted_times, listed_times):
+    """
+    Compare posted hours against listed hours, accounting for split/midnight-crossing hours.
+    Returns True if they represent the same operating hours (allowing for different storage formats).
+    """
+    # Check if posted hours cross midnight (start > end numerically)
+    p_start_hour = int(posted_times["start"].split(':')[0]) if posted_times.get("start") else -1
+    p_end_hour = int(posted_times["end"].split(':')[0]) if posted_times.get("end") else -1
+    
+    # Check if listed hours are split into multiple shifts (midnight crossing)
+    l_start = posted_times.get("start", "")
+    l_end = posted_times.get("end", "")
+    
+    # Simple comparison: if start and end match within 30 min tolerance
+    if posted_times.get("start") and listed_times.get("start"):
+        start_diff = time_diff_min(posted_times["start"], listed_times["start"])
+        if start_diff > 30:
+            return False
+    
+    if posted_times.get("end") and listed_times.get("end"):
+        end_diff = time_diff_min(posted_times["end"], listed_times["end"])
+        if end_diff > 30:
+            return False
+    
+    return True
+
 def extract_special_hours(text):
-    """Extract special holiday hours from text. Looks for SPECIAL HOLIDAY HOURS: section"""
+    """
+    Extract special holiday hours from text - STRICT VERSION WITH HALLUCINATION DETECTION
+    
+    CRITICAL RULES:
+    1. Only extract if explicitly described as a visible sign/posted hours (not inferred)
+    2. Reject entries with inference keywords (typically, usually, assume, likely, probably)
+    3. Only extract from SPECIAL HOLIDAY HOURS section with high confidence
+    4. Prevent hallucinations where GPT makes assumptions about holidays
+    """
     special_hours = []
     
-    # First, try to find the SPECIAL HOLIDAY HOURS: section
+    # HALLUCINATION DETECTION: Phrases that indicate GPT is inferring vs. observing
+    hallucination_indicators = [
+        "typically", "usually", "assume", "likely", "probably",
+        "most stores", "many stores", "generally", "common practice",
+        "would be", "should be", "may be", "might be",
+        "i imagine", "ordinarily", "customarily", "based on",
+        "if the store follows", "in general", "typically closed",
+        "is usually closed", "would probably be closed"
+    ]
+    
+    # First, try to find the SPECIAL HOLIDAY HOURS: section (must be explicitly labeled)
     special_section_match = re.search(
         r'SPECIAL\s+HOLIDAY\s+HOURS\s*:\s*(.*?)(?:\n\n|\Z)',
         text,
@@ -159,12 +394,13 @@ def extract_special_hours(text):
     )
     
     if not special_section_match:
-        # Fallback: search the entire text line by line (for cases where format isn't perfect)
-        lines = text.split('\n')
-    else:
-        # Parse from the special section
-        section_text = special_section_match.group(1)
-        lines = section_text.split('\n')
+        # No special hours section found - don't extract any holiday hours
+        # (Prevents hallucinations when GPT infers but doesn't explicitly describe)
+        return special_hours
+    
+    # Parse from the special section only
+    section_text = special_section_match.group(1)
+    lines = section_text.split('\n')
     
     # Holiday patterns - ORDER MATTERS! Check specific holidays (with "Eve") BEFORE generic ones
     holidays_to_check = [
@@ -197,6 +433,13 @@ def extract_special_hours(text):
             continue
         
         lower_line = line.lower()
+        
+        # CHECK FOR HALLUCINATION INDICATORS - SKIP THIS LINE IF FOUND
+        has_hallucination_indicator = any(
+            indicator in lower_line for indicator in hallucination_indicators
+        )
+        if has_hallucination_indicator:
+            continue  # Skip this entry - it's likely inferred, not observed
         
         # Find which holiday is in this line
         found_holiday = None
@@ -810,31 +1053,62 @@ Examples of what NOT to do:
 
 If recommending changed hours, list the full weekly schedule with BOTH opening and closing times clearly (e.g. Monday: 08:00 - 22:00).
 
+CRITICAL - TIME CONVERSION RULES:
+- "12:00 AM" (midnight) = "00:00" in 24-hour format
+- "1:00 AM" through "11:59 AM" = "01:00" through "11:59" (add nothing, just convert)
+- "12:00 PM" (noon) = "12:00" in 24-hour format
+- "1:00 PM" through "11:59 PM" = "13:00" through "23:59" (add 12 hours)
+- "2 AM" = "02:00" NOT "14:00"
+- "5 AM - 2 AM" means store opens at 5 AM and closes at 2 AM next day
+
+MIDNIGHT CROSSING DETECTION:
+When hours cross midnight (e.g., 5 AM - 2 AM next day):
+- The start time is LATER in the day than the end time numerically (e.g., 05:00 > 02:00)
+- Represent as: Start time first, then note it crosses to next day
+- Example: "5 AM to 2 AM next day" = 05:00 - 02:00, NOT 05:00 - 14:00
+
 If you detect an address change, include a line:
 New Address: [the new address if visible, or "Not shown" if not visible]
 
-CRITICAL - SPECIAL HOLIDAY HOURS AT END:
-If you see special hours for any holidays, you MUST include a separate section at the very end of your response (after Clarity score) with each holiday on its own line:
+CRITICAL - SPECIAL HOLIDAY HOURS AT END - STRICT REQUIREMENTS:
+ONLY report special holiday hours if you see a PHYSICAL SIGN posted that explicitly shows holiday hours.
+DO NOT infer, assume, or guess about holidays. DO NOT report holiday hours based on "typical practices".
+
+If you see a sign that says "Holiday Hours:" or lists specific holidays with hours, include them.
+Otherwise, leave this section EMPTY.
+
+If you see special hours for any holidays on a visible sign, include this section at the very end:
 
 SPECIAL HOLIDAY HOURS:
 [Holiday Name]: [CLOSED or HH:MM-HH:MM]
 
-Examples:
+Examples (ONLY IF VISIBLE ON SIGN):
 SPECIAL HOLIDAY HOURS:
 Thanksgiving: Closed
-Christmas Eve: Open-14:00
+Christmas Eve: 09:00-14:00
 Christmas Day: Closed
-New Year's Eve: Open-19:00
+New Year's Eve: 09:00-19:00
 New Year's Day: Closed
 
 CRITICAL RULES FOR SPECIAL HOURS:
-- Each holiday on a separate line
+- ONLY report hours that are EXPLICITLY SHOWN on a visible sign
+- DO NOT assume stores will be closed on holidays
+- DO NOT write "Thanksgiving: Closed" unless you actually see this text on a sign
+- DO NOT use phrases like "typically closed", "usually closed", "likely closed", etc.
+- Each holiday on a separate line (if present)
 - Use exact holiday names: "Thanksgiving", "Christmas Eve", "New Year's Eve", "Christmas Day", "New Year's Day", "Black Friday", etc.
 - Time format: Use 24-hour format (14:00 not 2:00 PM)
 - For closed stores: write "Closed" not "Close at X" or "Closes at X"
 - For open stores: write the full range "HH:MM-HH:MM" or if only closing time known, write "09:00-HH:MM"
 - This section MUST be at the very end of your response after the Clarity score
 - Do NOT include dates or day-of-week info, just the time
+- If NO special holiday hours are visible on a sign, leave this section BLANK
+
+CRITICAL - DO NOT HALLUCINATE:
+❌ "Thanksgiving: Closed" unless you see this exact text on the store sign
+❌ "New Year's Day: Closed" unless you see this exact text on the store sign
+❌ Any holiday hours that you inferred or assumed
+✅ Only holiday hours that are explicitly posted on a visible sign in the image
 
 CRITICAL - CLARITY SCORING INSTRUCTIONS:
 Rate clarity based ONLY on the specific sign relevant to your recommendation:
@@ -1225,6 +1499,26 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     continue
 
                 listed = extract_hours(store_hours)
+                
+                # NEW: Use the improved hour comparison function
+                # This checks if posted hours already match DoorDash hours using normalized comparison
+                should_change, change_reason = should_recommend_hour_change(listed, result, clarity)
+                
+                if not should_change:
+                    # Hours already match - no need to change
+                    recommendations.append("No change")
+                    reasons.append(change_reason)
+                    summary_reasons.append(change_reason)
+                    deactivation_reason_id.append("")
+                    special_hours_list.append(special_hours_extracted)
+                    is_temp_deactivation.append(False)
+                    confidence_scores.append(clarity)
+                    new_addresses.append("")
+                    temp_duration.append("")
+                    for day in bulk_hours:
+                        bulk_hours[day]["start"].append("")
+                        bulk_hours[day]["end"].append("")
+                    continue
 
                 if len(posted) in [1, 2]:
                     starts = set(v["start"] for v in posted.values() if v.get("start"))
@@ -1252,14 +1546,53 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     continue
 
                 # Count how many days have significant differences (>30 min)
+                # Handle both single shifts and split shifts
                 diff_days = 0
                 for day in posted:
                     if day in listed:
-                        p_start, p_end = posted[day]["start"], posted[day]["end"]
-                        l_start, l_end = listed[day]["start"], listed[day]["end"]
-                        # Check if difference > 30 minutes (relaxed from 5 to handle minor OCR errors)
-                        if time_diff_min(p_start, l_start) > 30 or time_diff_min(p_end, l_end) > 30:
-                            diff_days += 1
+                        p_start = posted[day].get("start", "")
+                        p_end = posted[day].get("end", "")
+                        
+                        l_data = listed[day]
+                        
+                        # Check if l_data is a list (split shifts) or dict (single shift)
+                        if isinstance(l_data, list):
+                            # DoorDash has split shifts for this day
+                            # Check if posted also crosses midnight
+                            if p_start and p_end:
+                                try:
+                                    p_start_hour = int(p_start.split(':')[0])
+                                    p_end_hour = int(p_end.split(':')[0])
+                                    
+                                    if p_start_hour > p_end_hour:
+                                        # Posted crosses midnight - compare with split shifts
+                                        # Expected split: 00:00-02:00, 05:00-23:59
+                                        # Posted should be: 05:00-02:00 (which we convert mentally)
+                                        # If first shift matches and second shift matches, no diff
+                                        match_found = False
+                                        for shift in l_data:
+                                            l_start = shift.get("start", "")
+                                            l_end = shift.get("end", "")
+                                            # Check if this shift matches posted
+                                            if (time_diff_min(p_start, l_start) <= 30 and 
+                                                time_diff_min(p_end, l_end) <= 30):
+                                                match_found = True
+                                                break
+                                        if not match_found:
+                                            diff_days += 1
+                                    else:
+                                        # Posted is single shift, DoorDash has split - likely different
+                                        diff_days += 1
+                                except:
+                                    diff_days += 1
+                            else:
+                                diff_days += 1
+                        else:
+                            # DoorDash has single shift
+                            l_start = l_data.get("start", "")
+                            l_end = l_data.get("end", "")
+                            if time_diff_min(p_start, l_start) > 30 or time_diff_min(p_end, l_end) > 30:
+                                diff_days += 1
                     else:
                         diff_days += 1
 
@@ -1451,12 +1784,60 @@ def create_bulk_upload_sheets(df):
         for day in days:
             start_col = f'start_time_{day}'
             end_col = f'end_time_{day}'
-            change_hours_bulk[f'{day}_start_time'] = change_hours_df[start_col].values
-            change_hours_bulk[f'{day}_end_time'] = change_hours_df[end_col].values
+            
+            # Get the raw times
+            start_times = change_hours_df[start_col].values
+            end_times = change_hours_df[end_col].values
+            
+            # Process each row to detect midnight-crossing hours
+            processed_start_times = []
+            processed_end_times = []
+            processed_start_times_2 = []
+            processed_end_times_2 = []
+            
+            for start, end in zip(start_times, end_times):
+                if start and end:
+                    # Convert to comparable format (HH:MM)
+                    try:
+                        start_hour = int(start.split(':')[0])
+                        end_hour = int(end.split(':')[0])
+                        
+                        # Check if this crosses midnight (start_hour > end_hour)
+                        # e.g., 05:00:00 to 02:00:00 means 5 AM to 2 AM next day
+                        if start_hour > end_hour:
+                            # Midnight-crossing hours - split into two shifts
+                            processed_start_times.append(start)
+                            processed_end_times.append('23:59:59')
+                            processed_start_times_2.append('00:00:00')
+                            processed_end_times_2.append(end)
+                        else:
+                            # Normal hours - no midnight crossing
+                            processed_start_times.append(start)
+                            processed_end_times.append(end)
+                            processed_start_times_2.append('')
+                            processed_end_times_2.append('')
+                    except:
+                        # If parsing fails, just use as-is
+                        processed_start_times.append(start)
+                        processed_end_times.append(end)
+                        processed_start_times_2.append('')
+                        processed_end_times_2.append('')
+                else:
+                    # Empty times
+                    processed_start_times.append('')
+                    processed_end_times.append('')
+                    processed_start_times_2.append('')
+                    processed_end_times_2.append('')
+            
+            # Add columns with proper naming
+            change_hours_bulk[f'{day}_start_time'] = processed_start_times
+            change_hours_bulk[f'{day}_end_time'] = processed_end_times
+            change_hours_bulk[f'{day}_start_time_2'] = processed_start_times_2
+            change_hours_bulk[f'{day}_end_time_2'] = processed_end_times_2
     else:
         cols = ['store_id']
         for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-            cols.extend([f'{day}_start_time', f'{day}_end_time'])
+            cols.extend([f'{day}_start_time', f'{day}_end_time', f'{day}_start_time_2', f'{day}_end_time_2'])
         change_hours_bulk = pd.DataFrame(columns=cols)
     
     # NEW: Create bulk_upload_special_hours sheet

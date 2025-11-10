@@ -487,6 +487,12 @@ def is_payment_issue(text):
     lower = text.lower()
     return any(phrase in lower for phrase in payment_issue_phrases)
 
+def is_address_change(text):
+    """Check if the text indicates an address change/relocation - VERY STRICT"""
+    lower = text.lower()
+    # Must have very explicit phrases
+    return any(phrase in lower for phrase in address_change_phrases)
+
 def is_hours_hallucination(text, extracted_hours_count):
     """Detect if GPT hallucinated store hours without actually seeing them in the image"""
     lower = text.lower()
@@ -776,6 +782,9 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             result = response.choices[0].message.content.strip()
             reason = result
             lower = result.lower()
+            
+            # Small delay to avoid rate limiting
+            time.sleep(0.5)
 
             # NEW: Extract special holiday hours
             special_hours_extracted = extract_special_hours(result)
@@ -1264,9 +1273,10 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 bulk_hours[day]["end"].append("")
 
         except Exception as e:
+            error_msg = str(e)
             recommendations.append("Error")
-            reasons.append(str(e))
-            summary_reasons.append("GPT error")
+            reasons.append(f"Exception occurred: {error_msg}")
+            summary_reasons.append("GPT error or processing error")
             deactivation_reason_id.append("")
             is_temp_deactivation.append(False)
             confidence_scores.append(0.0)
@@ -1276,6 +1286,11 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             for day in bulk_hours:
                 bulk_hours[day]["start"].append("")
                 bulk_hours[day]["end"].append("")
+            
+            # Log the error for debugging
+            import traceback
+            traceback.print_exc()
+            print(f"⚠️ Row {i}: {error_msg[:100]}")
     
     # Verify lengths match before assigning
     assert len(recommendations) == len(df), f"Mismatch: {len(recommendations)} vs {len(df)}"

@@ -79,6 +79,25 @@ payment_issue_phrases = [
     "no cards accepted", "credit card machine down", "debit cards not accepted"
 ]
 
+# Holiday keywords for special hours detection
+holiday_keywords = {
+    "thanksgiving": ["thanksgiving"],
+    "black friday": ["black friday"],
+    "christmas": ["christmas", "holiday"],
+    "new year": ["new year", "new year's"],
+    "easter": ["easter"],
+    "labor day": ["labor day"],
+    "memorial day": ["memorial day"],
+    "july 4th": ["july 4", "independence day"],
+    "independence day": ["independence day"],
+    "halloween": ["halloween"],
+    "cyber monday": ["cyber monday"],
+    "mother's day": ["mother's day"],
+    "father's day": ["father's day"],
+    "valentine's day": ["valentine's day"],
+    "st. patrick's day": ["st. patrick", "patrick's day"]
+}
+
 # ============= HELPER FUNCTIONS =============
 def categorize_closure(text):
     lower = text.lower()
@@ -127,6 +146,130 @@ def extract_hours(text):
             except:
                 continue
     return hours
+
+def extract_special_hours(text):
+    """Extract special holiday hours from text like 'Thanksgiving: Closed' or 'Black Friday: 8:00 am - 9:00 pm'"""
+    special_hours = []
+    lower = text.lower()
+    
+    # Match patterns like "Holiday: closed" or "Holiday: 8:00 am - 9:00 pm"
+    holiday_pattern = r"((?:thanksgiving|black friday|christmas|new year|easter|labor day|memorial day|july 4|independence day|halloween|cyber monday|mother's day|father's day|valentine's day|st\. patrick).*?):\s*(closed|no operating hours|no hours|(\d{1,2}:\d{2}(?:\s*[ap]m)?)\s*[-–]\s*(\d{1,2}:\d{2}(?:\s*[ap]m)?))"
+    
+    for match in re.finditer(holiday_pattern, text, re.IGNORECASE):
+        holiday_name = match.group(1).strip()
+        time_info = match.group(2).strip()
+        
+        # Check if closed
+        is_closed = any(phrase in time_info.lower() for phrase in ["closed", "no operating", "no hours"])
+        
+        if is_closed:
+            special_hours.append({
+                'holiday': holiday_name,
+                'is_open': 'no',
+                'start_time': '',
+                'end_time': ''
+            })
+        else:
+            # Try to parse the time
+            try:
+                start_time = match.group(3)
+                end_time = match.group(4)
+                
+                if start_time and end_time:
+                    start_clean = start_time.strip().lower().replace(" ", "")
+                    end_clean = end_time.strip().lower().replace(" ", "")
+                    
+                    if not ("am" in start_clean or "pm" in start_clean):
+                        start_clean += "am"
+                    if not ("am" in end_clean or "pm" in end_clean):
+                        end_clean += "pm"
+                    
+                    start_formatted = datetime.datetime.strptime(start_clean, "%I:%M%p").strftime("%H:%M")
+                    end_formatted = datetime.datetime.strptime(end_clean, "%I:%M%p").strftime("%H:%M")
+                    
+                    special_hours.append({
+                        'holiday': holiday_name,
+                        'is_open': 'yes',
+                        'start_time': start_formatted,
+                        'end_time': end_formatted
+                    })
+            except:
+                pass
+    
+    return special_hours
+
+def get_holiday_date(holiday_name, year=2025):
+    """Get the date for a given holiday"""
+    lower_holiday = holiday_name.lower()
+    
+    # Fixed holidays
+    if "thanksgiving" in lower_holiday:
+        # Thanksgiving is 4th Thursday of November
+        date = datetime.date(year, 11, 1)
+        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
+        return datetime.date(year, 11, thursdays[3]) if len(thursdays) > 3 else None
+    elif "black friday" in lower_holiday:
+        # Day after Thanksgiving
+        date = datetime.date(year, 11, 1)
+        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
+        if len(thursdays) > 3:
+            return datetime.date(year, 11, thursdays[3] + 1)
+    elif "christmas" in lower_holiday:
+        return datetime.date(year, 12, 25)
+    elif "new year" in lower_holiday:
+        return datetime.date(year + 1, 1, 1)
+    elif "easter" in lower_holiday:
+        # Easter calculation (simplified - you may want a proper library)
+        # For 2025, Easter is April 20
+        return datetime.date(year, 4, 20) if year == 2025 else None
+    elif "labor day" in lower_holiday:
+        # First Monday of September
+        date = datetime.date(year, 9, 1)
+        while date.weekday() != 0:
+            date += datetime.timedelta(days=1)
+        return date
+    elif "memorial day" in lower_holiday:
+        # Last Monday of May
+        date = datetime.date(year, 5, 31)
+        while date.weekday() != 0:
+            date -= datetime.timedelta(days=1)
+        return date
+    elif "july 4" in lower_holiday or "independence day" in lower_holiday:
+        return datetime.date(year, 7, 4)
+    elif "halloween" in lower_holiday:
+        return datetime.date(year, 10, 31)
+    elif "mother's day" in lower_holiday:
+        # Second Sunday of May
+        date = datetime.date(year, 5, 1)
+        sundays = 0
+        while sundays < 2:
+            if date.weekday() == 6:
+                sundays += 1
+            if sundays < 2:
+                date += datetime.timedelta(days=1)
+        return date
+    elif "father's day" in lower_holiday:
+        # Third Sunday of June
+        date = datetime.date(year, 6, 1)
+        sundays = 0
+        while sundays < 3:
+            if date.weekday() == 6:
+                sundays += 1
+            if sundays < 3:
+                date += datetime.timedelta(days=1)
+        return date
+    elif "valentine's day" in lower_holiday:
+        return datetime.date(year, 2, 14)
+    elif "cyber monday" in lower_holiday:
+        # Monday after Black Friday (Thanksgiving + 3 days)
+        date = datetime.date(year, 11, 1)
+        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
+        if len(thursdays) > 3:
+            return datetime.date(year, 11, thursdays[3] + 3)
+    elif "st. patrick" in lower_holiday or "patrick's day" in lower_holiday:
+        return datetime.date(year, 3, 17)
+    
+    return None
 
 def normalize_time(t):
     if not t or not isinstance(t, str) or not re.match(r"\d{1,2}:\d{2}:\d{2}", t):
@@ -278,6 +421,7 @@ def process_store_hours(df):
     confidence_scores = []
     new_addresses = []
     temp_duration = []
+    special_hours_list = []  # NEW: Track special hours for each store
     
     bulk_hours = {day: {"start": [], "end": []} for day in [
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
@@ -302,6 +446,7 @@ def process_store_hours(df):
             confidence_scores.append(0.0)
             new_addresses.append("")
             temp_duration.append("")
+            special_hours_list.append([])  # NEW
             for day in bulk_hours:
                 bulk_hours[day]["start"].append("")
                 bulk_hours[day]["end"].append("")
@@ -309,6 +454,12 @@ def process_store_hours(df):
 
         prompt = f"""
 You are reviewing a Dasher photo of a store entrance. CRITICAL: Check for closure and relocation signs FIRST before trying to read store hours.
+
+SPECIAL ATTENTION - CHECK FOR HOLIDAY/SPECIAL HOURS SIGNS:
+Before processing regular hours, look for signs indicating special hours for upcoming holidays or special dates:
+- Thanksgiving, Black Friday, Christmas, New Year's, Easter, Labor Day, etc.
+- Format like: "Thanksgiving: CLOSED" or "Black Friday: 8:00 AM - 9:00 PM"
+- List ALL special holiday hours you can read clearly
 
 PRIORITY ORDER (check in this order):
 1) Is there a RELOCATION/ADDRESS CHANGE sign?
@@ -374,6 +525,14 @@ If recommending changed hours, list the full weekly schedule with BOTH opening a
 If you detect an address change, include a line:
 New Address: [the new address if visible, or "Not shown" if not visible]
 
+SPECIAL HOLIDAY HOURS:
+If you see special hours for upcoming holidays, list them in this format:
+Special Holiday Hours:
+- [Holiday Name]: [CLOSED or HH:MM - HH:MM]
+Example:
+- Thanksgiving: CLOSED
+- Black Friday: 08:00 - 21:00
+
 CRITICAL - CLARITY SCORING INSTRUCTIONS:
 Rate clarity based ONLY on the specific sign relevant to your recommendation:
 
@@ -411,6 +570,10 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             result = response.choices[0].message.content.strip()
             reason = result
             lower = result.lower()
+
+            # NEW: Extract special holiday hours
+            special_hours_extracted = extract_special_hours(result)
+            special_hours_list.append(special_hours_extracted)
 
             posted = extract_hours(result)
             parse_coverage = confidence_from_hours(posted)
@@ -811,6 +974,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             confidence_scores.append(0.0)
             new_addresses.append("")
             temp_duration.append("")
+            special_hours_list.append([])  # NEW
             for day in bulk_hours:
                 bulk_hours[day]["start"].append("")
                 bulk_hours[day]["end"].append("")
@@ -823,6 +987,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
     df["CONFIDENCE_SCORE"] = confidence_scores
     df["NEW_ADDRESS"] = new_addresses
     df["TEMP_DURATION"] = temp_duration
+    df["SPECIAL_HOURS_RAW"] = special_hours_list  # NEW: Store raw special hours data
 
     for day in bulk_hours:
         df[f"start_time_{day}"] = bulk_hours[day]["start"]
@@ -886,13 +1051,51 @@ def create_bulk_upload_sheets(df):
             cols.extend([f'{day}_start_time', f'{day}_end_time'])
         change_hours_bulk = pd.DataFrame(columns=cols)
     
+    # NEW: Create bulk_upload_special_hours sheet
+    special_hours_records = []
+    for idx, row in df.iterrows():
+        store_id = row.get('STORE_ID', '')
+        store_name = row.get('STORE_NAME', '')
+        special_hours_raw = row.get('SPECIAL_HOURS_RAW', [])
+        
+        # Convert raw special hours to bulk upload format
+        for special_hour in special_hours_raw:
+            holiday_name = special_hour.get('holiday', '')
+            is_open = special_hour.get('is_open', 'no')
+            start_time = special_hour.get('start_time', '')
+            end_time = special_hour.get('end_time', '')
+            
+            # Get the date for this holiday
+            holiday_date = get_holiday_date(holiday_name)
+            if holiday_date:
+                date_str = holiday_date.strftime("%m/%d/%Y")
+                
+                # Format description
+                description = f"{holiday_name} picked up by DRSC AI Tool"
+                
+                special_hours_records.append({
+                    'date': date_str,
+                    'store_id': store_id,
+                    'store_name': store_name,
+                    'open': is_open,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'description': description
+                })
+    
+    if special_hours_records:
+        bulk_upload_special_hours = pd.DataFrame(special_hours_records)
+    else:
+        bulk_upload_special_hours = pd.DataFrame(columns=['date', 'store_id', 'store_name', 'open', 'start_time', 'end_time', 'description'])
+    
     print(f"✅ Created bulk upload sheets:")
     print(f"   - Address change: {len(address_change_bulk)} stores")
     print(f"   - Perm close: {len(perm_close_bulk)} stores")
     print(f"   - Temp close: {len(temp_close_bulk)} stores")
     print(f"   - Change hours: {len(change_hours_bulk)} stores")
+    print(f"   - Special hours: {len(bulk_upload_special_hours)} records")  # NEW
     
-    return address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk
+    return address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk, bulk_upload_special_hours
 
 # ============= FUNCTION 4: SEND TO SLACK =============
 def send_to_slack(df, timestamp_str):
@@ -901,7 +1104,7 @@ def send_to_slack(df, timestamp_str):
     client = WebClient(token=SLACK_BOT_TOKEN)
     
     try:
-        address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk = create_bulk_upload_sheets(df)
+        address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk, bulk_upload_special_hours = create_bulk_upload_sheets(df)
         
         excel_filename = f'store_hours_analysis_{timestamp_str}.xlsx'
         
@@ -911,6 +1114,7 @@ def send_to_slack(df, timestamp_str):
             perm_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Perm_Close', index=False)
             temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
             change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
+            bulk_upload_special_hours.to_excel(writer, sheet_name='Bulk_Upload_Special_Hours', index=False)  # NEW
         
         print(f"✅ Created Excel file: {excel_filename}")
         
@@ -934,6 +1138,7 @@ def send_to_slack(df, timestamp_str):
         summary_parts.append(f"- Bulk_Upload_Temp_Close: {len(temp_close_bulk)} stores")
         summary_parts.append(f"   (Duration: 12 for regular closures, 700 for 'until further notice')")
         summary_parts.append(f"- Bulk_Upload_Change_Hours: {len(change_hours_bulk)} stores")
+        summary_parts.append(f"- Bulk_Upload_Special_Hours: {len(bulk_upload_special_hours)} records")  # NEW
         
         summary = "\n".join(summary_parts)
         

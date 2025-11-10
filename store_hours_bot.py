@@ -173,12 +173,17 @@ def extract_special_hours(text):
         ('christmas eve', ['christmas eve', "christmas's eve"]),
         ('christmas day', ['christmas day']),
         ('christmas', ['christmas']),
+        ('boxing day', ['boxing day']),
         ("new year's eve", ["new year's eve", 'new years eve', 'new year eve']),
         ("new year's day", ["new year's day", 'new years day', 'new year day']),
         ('easter', ['easter']),
-        ('labor day', ['labor day']),
+        ("presidents' day", ["presidents' day", 'presidents day', 'washington day']),
         ('memorial day', ['memorial day']),
+        ('juneteenth', ['juneteenth']),
         ('july 4th', ['july 4th', 'july 4', 'independence day']),
+        ('labor day', ['labor day']),
+        ('columbus day', ['columbus day']),
+        ('veterans day', ['veterans day']),
         ('halloween', ['halloween']),
         ('cyber monday', ['cyber monday']),
         ("mother's day", ["mother's day", 'mothers day']),
@@ -343,69 +348,155 @@ def get_holiday_date(holiday_name, year=2025):
     # Fixed holidays
     if "thanksgiving" in lower_holiday:
         # Thanksgiving is 4th Thursday of November
-        date = datetime.date(year, 11, 1)
-        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
-        return datetime.date(year, 11, thursdays[3]) if len(thursdays) > 3 else None
+        # Find all Thursdays in November
+        november_thursdays = []
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 11, day).weekday() == 3:  # 3 = Thursday
+                    november_thursdays.append(day)
+            except ValueError:
+                break
+        # Return 4th Thursday (index 3)
+        if len(november_thursdays) >= 4:
+            return datetime.date(year, 11, november_thursdays[3])
+        return None
     elif "black friday" in lower_holiday:
-        # Day after Thanksgiving
-        date = datetime.date(year, 11, 1)
-        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
-        if len(thursdays) > 3:
-            return datetime.date(year, 11, thursdays[3] + 1)
+        # Black Friday is day after Thanksgiving (4th Thursday + 1)
+        november_thursdays = []
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 11, day).weekday() == 3:
+                    november_thursdays.append(day)
+            except ValueError:
+                break
+        if len(november_thursdays) >= 4:
+            return datetime.date(year, 11, november_thursdays[3] + 1)
+        return None
     elif "christmas" in lower_holiday:
-        return datetime.date(year, 12, 25)
+        # Handle Christmas Eve and Christmas Day
+        if "eve" in lower_holiday:
+            return datetime.date(year, 12, 24)
+        else:
+            return datetime.date(year, 12, 25)
+    elif "boxing day" in lower_holiday:
+        return datetime.date(year, 12, 26)
     elif "new year" in lower_holiday:
-        return datetime.date(year + 1, 1, 1)
+        # Handle New Year's Eve and New Year's Day
+        if "eve" in lower_holiday:
+            return datetime.date(year, 12, 31)
+        else:
+            return datetime.date(year + 1, 1, 1)
+    elif "valentine" in lower_holiday:
+        return datetime.date(year, 2, 14)
+    elif "presidents" in lower_holiday:
+        # Presidents' Day - 3rd Monday of February
+        mondays = 0
+        for day in range(1, 30):
+            try:
+                if datetime.date(year, 2, day).weekday() == 0:  # 0 = Monday
+                    mondays += 1
+                    if mondays == 3:
+                        return datetime.date(year, 2, day)
+            except ValueError:
+                break
+        return None
+    elif "st. patrick" in lower_holiday or "patrick" in lower_holiday:
+        return datetime.date(year, 3, 17)
     elif "easter" in lower_holiday:
-        # Easter calculation (simplified - you may want a proper library)
-        # For 2025, Easter is April 20
+        # Easter calculation (simplified - for 2025 is April 20)
         return datetime.date(year, 4, 20) if year == 2025 else None
-    elif "labor day" in lower_holiday:
-        # First Monday of September
-        date = datetime.date(year, 9, 1)
-        while date.weekday() != 0:
-            date += datetime.timedelta(days=1)
-        return date
     elif "memorial day" in lower_holiday:
         # Last Monday of May
         date = datetime.date(year, 5, 31)
         while date.weekday() != 0:
             date -= datetime.timedelta(days=1)
         return date
-    elif "july 4" in lower_holiday or "independence day" in lower_holiday:
-        return datetime.date(year, 7, 4)
-    elif "halloween" in lower_holiday:
-        return datetime.date(year, 10, 31)
     elif "mother's day" in lower_holiday:
         # Second Sunday of May
-        date = datetime.date(year, 5, 1)
         sundays = 0
-        while sundays < 2:
-            if date.weekday() == 6:
-                sundays += 1
-            if sundays < 2:
-                date += datetime.timedelta(days=1)
-        return date
+        for day in range(1, 32):
+            try:
+                if datetime.date(year, 5, day).weekday() == 6:  # 6 = Sunday
+                    sundays += 1
+                    if sundays == 2:
+                        return datetime.date(year, 5, day)
+            except ValueError:
+                break
+        return None
+    elif "juneteenth" in lower_holiday:
+        return datetime.date(year, 6, 19)
     elif "father's day" in lower_holiday:
         # Third Sunday of June
-        date = datetime.date(year, 6, 1)
         sundays = 0
-        while sundays < 3:
-            if date.weekday() == 6:
-                sundays += 1
-            if sundays < 3:
-                date += datetime.timedelta(days=1)
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 6, day).weekday() == 6:  # 6 = Sunday
+                    sundays += 1
+                    if sundays == 3:
+                        return datetime.date(year, 6, day)
+            except ValueError:
+                break
+        return None
+    elif "july 4" in lower_holiday or "independence day" in lower_holiday:
+        return datetime.date(year, 7, 4)
+    elif "labor day" in lower_holiday:
+        # First Monday of September
+        date = datetime.date(year, 9, 1)
+        while date.weekday() != 0:
+            date += datetime.timedelta(days=1)
         return date
-    elif "valentine's day" in lower_holiday:
-        return datetime.date(year, 2, 14)
+    elif "columbus day" in lower_holiday:
+        # Columbus Day - 2nd Monday of October
+        mondays = 0
+        for day in range(1, 32):
+            try:
+                if datetime.date(year, 10, day).weekday() == 0:  # 0 = Monday
+                    mondays += 1
+                    if mondays == 2:
+                        return datetime.date(year, 10, day)
+            except ValueError:
+                break
+        return None
+    elif "halloween" in lower_holiday:
+        return datetime.date(year, 10, 31)
+    elif "veterans day" in lower_holiday:
+        return datetime.date(year, 11, 11)
+    elif "thanksgiving" in lower_holiday:
+        # Thanksgiving - 4th Thursday of November
+        november_thursdays = []
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 11, day).weekday() == 3:  # 3 = Thursday
+                    november_thursdays.append(day)
+            except ValueError:
+                break
+        if len(november_thursdays) >= 4:
+            return datetime.date(year, 11, november_thursdays[3])
+        return None
+    elif "black friday" in lower_holiday:
+        # Black Friday - day after Thanksgiving (4th Thursday + 1)
+        november_thursdays = []
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 11, day).weekday() == 3:
+                    november_thursdays.append(day)
+            except ValueError:
+                break
+        if len(november_thursdays) >= 4:
+            return datetime.date(year, 11, november_thursdays[3] + 1)
+        return None
     elif "cyber monday" in lower_holiday:
-        # Monday after Black Friday (Thanksgiving + 3 days)
-        date = datetime.date(year, 11, 1)
-        thursdays = [d for d in range(22, 29) if datetime.date(year, 11, d).weekday() == 3]
-        if len(thursdays) > 3:
-            return datetime.date(year, 11, thursdays[3] + 3)
-    elif "st. patrick" in lower_holiday or "patrick's day" in lower_holiday:
-        return datetime.date(year, 3, 17)
+        # Cyber Monday - Monday after Black Friday (Thanksgiving + 3 days)
+        november_thursdays = []
+        for day in range(1, 31):
+            try:
+                if datetime.date(year, 11, day).weekday() == 3:  # 3 = Thursday
+                    november_thursdays.append(day)
+            except ValueError:
+                break
+        if len(november_thursdays) >= 4:
+            return datetime.date(year, 11, november_thursdays[3] + 3)
+        return None
     
     return None
 

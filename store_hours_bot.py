@@ -1886,7 +1886,7 @@ def create_bulk_upload_sheets(df):
     
     return address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk, bulk_upload_special_hours
 
-# ============= FUNCTION 4: SEND TO SLACK =============
+# ============= FUNCTION 4: SEND TO SLACK (UPDATED) =============
 def send_to_slack(df, timestamp_str):
     print("\n📤 Sending to Slack...")
     
@@ -1903,31 +1903,47 @@ def send_to_slack(df, timestamp_str):
             perm_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Perm_Close', index=False)
             temp_close_bulk.to_excel(writer, sheet_name='Bulk_Upload_Temp_Close', index=False)
             change_hours_bulk.to_excel(writer, sheet_name='Bulk_Upload_Change_Hours', index=False)
-            bulk_upload_special_hours.to_excel(writer, sheet_name='Bulk_Upload_Special_Hours', index=False)  # NEW
+            bulk_upload_special_hours.to_excel(writer, sheet_name='Bulk_Upload_Special_Hours', index=False)
         
         print(f"✅ Created Excel file: {excel_filename}")
         
+        # Calculate metrics for summary
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
+        total_stores = len(df)
         
+        # Build formatted summary
         summary_parts = []
+        summary_parts.append("*DRSC AI Stats:*")
+        summary_parts.append("")
         summary_parts.append("*Store Hours Analysis Complete*")
-        summary_parts.append("")
-        summary_parts.append(f"Total stores analyzed: {len(df)}")
         summary_parts.append(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        summary_parts.append("")
-        summary_parts.append("Recommendations:")
+        summary_parts.append(f"• Total stores analyzed: {total_stores}")
         
-        for rec, count in rec_counts.items():
-            summary_parts.append(f"- {rec}: {count}")
+        # Calculate percentages for each category
+        no_change_count = rec_counts.get('No change', 0)
+        no_change_pct = (no_change_count / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• No Change: {no_change_count} stores, {no_change_pct:.1f}% of total stores no change")
         
-        summary_parts.append("")
-        summary_parts.append("Bulk Upload Sheets Ready:")
-        summary_parts.append(f"- Flag_New_Address: {len(address_change_bulk)} stores")
-        summary_parts.append(f"- Bulk_Upload_Perm_Close: {len(perm_close_bulk)} stores")
-        summary_parts.append(f"- Bulk_Upload_Temp_Close: {len(temp_close_bulk)} stores")
-        summary_parts.append(f"   (Duration: 12 for regular closures, 700 for 'until further notice')")
-        summary_parts.append(f"- Bulk_Upload_Change_Hours: {len(change_hours_bulk)} stores")
-        summary_parts.append(f"- Bulk_Upload_Special_Hours: {len(bulk_upload_special_hours)} records")  # NEW
+        change_hours_count = len(change_hours_bulk)
+        change_hours_pct = (change_hours_count / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• Change Hours: {change_hours_count} stores in Bulk_Upload_Change_Hours, {change_hours_pct:.1f}% of total stores with change hours")
+        
+        temp_close_count = len(temp_close_bulk)
+        temp_close_pct = (temp_close_count / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• Temp Close: {temp_close_count} stores in Bulk_Upload_Temp_Close, {temp_close_pct:.1f}% of total stores that are recommended temp close")
+        
+        perm_close_count = len(perm_close_bulk)
+        perm_close_pct = (perm_close_count / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• Perm Close: {perm_close_count} stores in Bulk_Upload_Perm_Close, {perm_close_pct:.1f}% of total stores that are recommended perm close")
+        
+        address_change_count = len(address_change_bulk)
+        address_change_pct = (address_change_count / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• Update address: {address_change_count} stores in Flag_New_Address, {address_change_pct:.1f}% of total stores that are recommended to update address")
+        
+        # For special hours, count unique stores (since one store can have multiple special hour records)
+        special_hours_stores = bulk_upload_special_hours['store_id'].nunique() if len(bulk_upload_special_hours) > 0 else 0
+        special_hours_pct = (special_hours_stores / total_stores * 100) if total_stores > 0 else 0
+        summary_parts.append(f"• Special Hours: {special_hours_stores} stores in Bulk_Upload_Special_Hours, {special_hours_pct:.1f}% of total stores that are recommended to add special hours for")
         
         summary = "\n".join(summary_parts)
         

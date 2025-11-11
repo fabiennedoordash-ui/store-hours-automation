@@ -364,27 +364,49 @@ def hours_match_allowing_split(posted_times, listed_times):
     
     return True
 
-def extract_special_hours(text):
+def extract_special_hours(text, clarity_score=None):
     """
-    Extract special holiday hours from text - STRICT VERSION WITH HALLUCINATION DETECTION
+    Extract special holiday hours from text - STRICT VERSION WITH SAME STANDARDS AS REGULAR HOURS
     
     CRITICAL RULES:
     1. Only extract if explicitly described as a visible sign/posted hours (not inferred)
     2. Reject entries with inference keywords (typically, usually, assume, likely, probably)
     3. Only extract from SPECIAL HOLIDAY HOURS section with high confidence
     4. Prevent hallucinations where GPT makes assumptions about holidays
+    5. REQUIRES SAME CLARITY (0.90+) AS REGULAR HOUR CHANGES
     """
     special_hours = []
     
-    # HALLUCINATION DETECTION: Phrases that indicate GPT is inferring vs. observing
+    # EXPANDED HALLUCINATION DETECTION - same strictness as regular hours
     hallucination_indicators = [
         "typically", "usually", "assume", "likely", "probably",
         "most stores", "many stores", "generally", "common practice",
         "would be", "should be", "may be", "might be",
         "i imagine", "ordinarily", "customarily", "based on",
         "if the store follows", "in general", "typically closed",
-        "is usually closed", "would probably be closed"
+        "is usually closed", "would probably be closed",
+        "standard practice", "normal hours", "expected",
+        "presumably", "supposedly", "apparently",
+        "i believe", "i think", "seems like", "appears to be",
+        "could be", "might show", "possibly"
     ]
+    
+    # STRICT: Must have explicit mention of a physical sign
+    sign_indicators = [
+        "sign shows", "sign reads", "posted", "displayed",
+        "visible on", "written on", "notice states",
+        "placard shows", "board displays", "window shows",
+        "sticker shows", "paper shows", "taped to",
+        "attached to", "hanging on", "printed on"
+    ]
+    
+    # Check if there's any indication of an actual physical sign
+    text_lower = text.lower()
+    has_physical_sign = any(indicator in text_lower for indicator in sign_indicators)
+    
+    if not has_physical_sign:
+        # No indication of a physical sign - don't extract
+        return special_hours
     
     # First, try to find the SPECIAL HOLIDAY HOURS: section (must be explicitly labeled)
     special_section_match = re.search(
@@ -395,11 +417,25 @@ def extract_special_hours(text):
     
     if not special_section_match:
         # No special hours section found - don't extract any holiday hours
-        # (Prevents hallucinations when GPT infers but doesn't explicitly describe)
+        return special_hours
+    
+    # Check for quality issues in the special hours section
+    section_text = special_section_match.group(1)
+    
+    # Quality phrases that indicate poor readability
+    quality_issues = [
+        "cannot read", "illegible", "unreadable", "too blurry",
+        "cannot make out", "unable to read", "unclear", "faint",
+        "obstructed", "too small", "hard to read", "glare", "shadow",
+        "partially visible", "cut off", "torn", "damaged"
+    ]
+    
+    section_lower = section_text.lower()
+    if any(issue in section_lower for issue in quality_issues):
+        # Quality issues with reading special hours - don't extract
         return special_hours
     
     # Parse from the special section only
-    section_text = special_section_match.group(1)
     lines = section_text.split('\n')
     
     # Holiday patterns - ORDER MATTERS! Check specific holidays (with "Eve") BEFORE generic ones
@@ -704,30 +740,6 @@ def get_holiday_date(holiday_name, year=2025):
         return datetime.date(year, 10, 31)
     elif "veterans day" in lower_holiday:
         return datetime.date(year, 11, 11)
-    elif "thanksgiving" in lower_holiday:
-        # Thanksgiving - 4th Thursday of November
-        november_thursdays = []
-        for day in range(1, 31):
-            try:
-                if datetime.date(year, 11, day).weekday() == 3:  # 3 = Thursday
-                    november_thursdays.append(day)
-            except ValueError:
-                break
-        if len(november_thursdays) >= 4:
-            return datetime.date(year, 11, november_thursdays[3])
-        return None
-    elif "black friday" in lower_holiday:
-        # Black Friday - day after Thanksgiving (4th Thursday + 1)
-        november_thursdays = []
-        for day in range(1, 31):
-            try:
-                if datetime.date(year, 11, day).weekday() == 3:
-                    november_thursdays.append(day)
-            except ValueError:
-                break
-        if len(november_thursdays) >= 4:
-            return datetime.date(year, 11, november_thursdays[3] + 1)
-        return None
     elif "cyber monday" in lower_holiday:
         # Cyber Monday - Monday after Black Friday (Thanksgiving + 3 days)
         november_thursdays = []
@@ -1151,12 +1163,30 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             # Small delay to avoid rate limiting
             time.sleep(0.5)
 
-            # NEW: Extract special holiday hours
-            special_hours_extracted = extract_special_hours(result)
-
             posted = extract_hours(result)
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
+
+            # NEW: Extract special holiday hours with clarity score passed
+            special_hours_extracted = extract_special_hours(result, clarity)
+            
+            # STRICT VALIDATION FOR SPECIAL HOURS - SAME AS REGULAR HOURS
+            if special_hours_extracted:
+                # Special hours need same high clarity (0.90+) as regular hour changes
+                if clarity < 0.90:
+                    # Clear special hours if clarity too low
+                    special_hours_extracted = []
+                    print(f"   Cleared special hours for store {row.get('STORE_ID')} - clarity {clarity:.2f} < 0.90")
+                
+                # Additional validation: Check if GPT indicated issues reading the image
+                if any(phrase in lower for phrase in severe_quality_issues):
+                    special_hours_extracted = []
+                    print(f"   Cleared special hours for store {row.get('STORE_ID')} - severe quality issues")
+                
+                # Check for uncertainty about special hours specifically
+                if special_hours_extracted and "special hours" in lower and any(p in lower for p in uncertain_phrases):
+                    special_hours_extracted = []
+                    print(f"   Cleared special hours for store {row.get('STORE_ID')} - uncertainty about special hours")
 
             # Check for uncertainty phrases first
             if any(p in lower for p in uncertain_phrases):
@@ -1164,7 +1194,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                 reasons.append("Model expressed uncertainty")
                 summary_reasons.append("Image unreadable or GPT uncertain")
                 deactivation_reason_id.append("")
-                special_hours_list.append(special_hours_extracted)
+                special_hours_list.append([])  # Clear special hours for uncertain cases
                 is_temp_deactivation.append(False)
                 confidence_scores.append(0.20)
                 new_addresses.append("")
@@ -1195,7 +1225,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
                         summary_reasons.append("Clarity too low")
                         deactivation_reason_id.append("")
-                        special_hours_list.append(special_hours_extracted)
+                        special_hours_list.append([])
                         is_temp_deactivation.append(False)
                         confidence_scores.append(clarity)
                         new_addresses.append("")
@@ -1226,7 +1256,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of relocation sign too low ({clarity:.2f} < 0.92)")
                     summary_reasons.append("Clarity too low for address change")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1265,7 +1295,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for long-term closure")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1297,7 +1327,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of permanent closure sign too low ({clarity:.2f} < 0.85)")
                     summary_reasons.append("Clarity too low for permanent closure")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1329,7 +1359,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of payment issue sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for payment issue")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1362,7 +1392,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for temp closure")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1397,7 +1427,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of closure sign too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low for temp closure")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1429,7 +1459,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Clarity of hours sign too low for hour changes ({clarity:.2f} < 0.90)")
                     summary_reasons.append("Clarity too low for hour changes")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1445,7 +1475,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("⚠️ HALLUCINATION DETECTED: High confidence hours but no sign location described or explicitly states hours not visible. Likely fabricated.")
                     summary_reasons.append("Hours likely hallucinated - no visible sign")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(0.1)  # Very low confidence for hallucination
                     new_addresses.append("")
@@ -1461,7 +1491,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("Severe image quality issues - hours completely unreadable")
                     summary_reasons.append("Hours completely unreadable")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity)
                     new_addresses.append("")
@@ -1488,7 +1518,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append(f"Incomplete hours detected - can only see opening OR closing times, not both. Cannot safely update hours with partial data.")
                     summary_reasons.append("Partial hours visible - need complete times")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(clarity * 0.5)  # Lower confidence for partial data
                     new_addresses.append("")
@@ -1535,7 +1565,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                     reasons.append("Too few days extracted to safely change hours (>=4 required)")
                     summary_reasons.append("Too few days extracted to safely change hours")
                     deactivation_reason_id.append("")
-                    special_hours_list.append(special_hours_extracted)
+                    special_hours_list.append([])
                     is_temp_deactivation.append(False)
                     confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
                     new_addresses.append("")
@@ -1622,7 +1652,7 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
                         reasons.append("Only 1 day differs with low confidence ({:.2f}) - likely OCR error, not flagging".format(overall_confidence))
                         summary_reasons.append("Only minor/single-day time difference (low confidence)")
                         deactivation_reason_id.append("")
-                        special_hours_list.append(special_hours_extracted)
+                        special_hours_list.append([])
                         is_temp_deactivation.append(False)
                         confidence_scores.append(overall_confidence)
                         new_addresses.append("")

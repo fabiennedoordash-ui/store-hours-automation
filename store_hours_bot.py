@@ -98,8 +98,29 @@ holiday_keywords = {
     "st. patrick's day": ["st. patrick", "patrick's day"]
 }
 
-# ============= HOUR NORMALIZATION FUNCTIONS =============
+# ============= NEGATIVE CONTEXT DETECTION =============
+def has_negative_context(text, phrase_position):
+    """
+    Check if a phrase at a given position has negative context before it.
+    Returns True if the phrase is preceded by negative words.
+    """
+    # Get context before the phrase (up to 50 characters)
+    context_start = max(0, phrase_position - 50)
+    context_before = text[context_start:phrase_position].lower()
+    
+    # List of negative indicators
+    negative_indicators = [
+        "no ", "not ", "n't ", "there is no", "there are no", 
+        "does not", "doesn't", "did not", "didn't", "without",
+        "absence of", "lacking", "missing", "none", "neither",
+        "there's no", "there isn't", "there aren't", "no sign",
+        "no indication", "no evidence"
+    ]
+    
+    # Check if any negative indicator appears in the context
+    return any(neg in context_before for neg in negative_indicators)
 
+# ============= HOUR NORMALIZATION FUNCTIONS =============
 def time_to_minutes(time_str):
     """Convert HH:MM or H:MM to minutes since midnight"""
     if not time_str or pd.isna(time_str):
@@ -271,7 +292,7 @@ def should_recommend_hour_change(dd_hours_dict, posted_hours_text, clarity_score
         print(f"Error in should_recommend_hour_change: {e}")
         return False, f"Error comparing hours: {str(e)}"
 
-# ============= HELPER FUNCTIONS =============
+# ============= UPDATED HELPER FUNCTIONS WITH NEGATIVE CONTEXT =============
 def categorize_closure(text):
     lower = text.lower()
     for category, terms in closure_categories.items():
@@ -279,20 +300,349 @@ def categorize_closure(text):
             return category
     return "other"
 
+def is_permanent_closure(text):
+    """Check if the text indicates a permanent closure - WITH NEGATIVE CONTEXT CHECK"""
+    lower = text.lower()
+    
+    # First check if it's a long-term temp closure (takes precedence)
+    for phrase in long_term_closure_phrases:
+        if phrase in lower:
+            index = lower.find(phrase)
+            if not has_negative_context(text, index):
+                return False  # It's long-term temp, not permanent
+    
+    strong_indicators = [
+        "permanently closing", "closed permanently", "permanent closure",
+        "permanently closed", "closing permanently", "will be permanently closing",
+        "this location is now permanently closed"
+    ]
+    
+    for phrase in strong_indicators:
+        if phrase in lower:
+            # Find all occurrences of the phrase
+            index = 0
+            while index < len(lower):
+                index = lower.find(phrase, index)
+                if index == -1:
+                    break
+                # Check if this occurrence has negative context
+                if not has_negative_context(text, index):
+                    return True  # Found a valid permanent closure mention
+                index += len(phrase)
+    
+    # Special handling for "store closing"
+    if "store closing" in lower:
+        permanent_context = [
+            "final", "last day", "we are closing",
+            "location is closing", "this store is closing"
+        ]
+        # Check each occurrence of "store closing"
+        index = 0
+        while index < len(lower):
+            index = lower.find("store closing", index)
+            if index == -1:
+                break
+            if not has_negative_context(text, index):
+                # Check if it has permanent context
+                surrounding_text = lower[max(0, index-30):min(len(lower), index+30)]
+                if any(ctx in surrounding_text for ctx in permanent_context):
+                    return True
+            index += len("store closing")
+    
+    return False
+
+def is_long_term_closure(text):
+    """Check if the text indicates a long-term temporary closure - WITH NEGATIVE CONTEXT CHECK"""
+    lower = text.lower()
+    
+    for phrase in long_term_closure_phrases:
+        if phrase in lower:
+            # Find all occurrences
+            index = 0
+            while index < len(lower):
+                index = lower.find(phrase, index)
+                if index == -1:
+                    break
+                # Check if this occurrence has negative context
+                if not has_negative_context(text, index):
+                    return True  # Found a valid long-term closure mention
+                index += len(phrase)
+    
+    return False
+
+def is_payment_issue(text):
+    """Check if the text indicates payment system issues - WITH NEGATIVE CONTEXT CHECK"""
+    lower = text.lower()
+    
+    for phrase in payment_issue_phrases:
+        if phrase in lower:
+            # Find all occurrences
+            index = 0
+            while index < len(lower):
+                index = lower.find(phrase, index)
+                if index == -1:
+                    break
+                # Check if this occurrence has negative context
+                if not has_negative_context(text, index):
+                    return True  # Found a valid payment issue mention
+                index += len(phrase)
+    
+    return False
+
+def is_address_change(text):
+    """Check if the text indicates an address change/relocation - WITH NEGATIVE CONTEXT CHECK"""
+    lower = text.lower()
+    
+    for phrase in address_change_phrases:
+        if phrase in lower:
+            # Find all occurrences
+            index = 0
+            while index < len(lower):
+                index = lower.find(phrase, index)
+                if index == -1:
+                    break
+                # Check if this occurrence has negative context
+                if not has_negative_context(text, index):
+                    return True  # Found a valid address change mention
+                index += len(phrase)
+    
+    return False
+
 def extract_new_address(text):
-    """Extract new address from text if mentioned"""
+    """Extract new address from text if mentioned - WITH NEGATIVE CONTEXT CHECK"""
     lower = text.lower()
     
     # Look for address patterns after relocation phrases
     for phrase in address_change_phrases:
         if phrase in lower:
-            # Try to find address pattern: numbers + street
-            address_pattern = r"(?:new address:|new location:|moved to:|find us at:)?\s*(\d+\s+[A-Za-z0-9\s,\.]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)[A-Za-z0-9\s,\.]*)"
-            match = re.search(address_pattern, text, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
+            # Find all occurrences
+            index = 0
+            while index < len(lower):
+                index = lower.find(phrase, index)
+                if index == -1:
+                    break
+                
+                # Check if this occurrence has negative context
+                if not has_negative_context(text, index):
+                    # Try to find address pattern after this phrase
+                    search_start = index
+                    search_text = text[search_start:min(len(text), search_start + 200)]
+                    
+                    # Try to find address pattern: numbers + street
+                    address_pattern = r"(?:new address:|new location:|moved to:|find us at:)?\s*(\d+\s+[A-Za-z0-9\s,\.]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)[A-Za-z0-9\s,\.]*)"
+                    match = re.search(address_pattern, search_text, re.IGNORECASE)
+                    if match:
+                        return match.group(1).strip()
+                
+                index += len(phrase)
     
     return ""
+
+def get_gpt_recommendation(text):
+    """
+    Extract the explicit recommendation from GPT's response.
+    Returns tuple: (recommendation, found)
+    """
+    lower = text.lower()
+    
+    # Look for explicit recommendation patterns
+    patterns = [
+        r"recommendation:\s*\*\*([^*]+)\*\*",  # **Recommendation**
+        r"recommendation:\s*([^\n]+)",          # Recommendation: ...
+        r"recommend:\s*\*\*([^*]+)\*\*",       # Recommend: **...**
+        r"recommend:\s*([^\n]+)"               # Recommend: ...
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            recommendation = match.group(1).strip()
+            return recommendation, True
+    
+    return "", False
+
+def should_trust_gpt_recommendation(gpt_recommendation, clarity_score):
+    """
+    Determine if we should trust GPT's explicit recommendation.
+    """
+    if not gpt_recommendation:
+        return False
+    
+    if clarity_score < 0.70:
+        return False
+    
+    # Map GPT recommendations to our action categories
+    gpt_to_action = {
+        "no change": "No change",
+        "change store hours": "Change Store Hours",
+        "temporarily close for day": "Temporarily Close For Day",
+        "permanently close store": "Permanently Close Store",
+        "address change": "Address Change"
+    }
+    
+    return gpt_recommendation in gpt_to_action
+
+def detect_sign_size_issues(text, clarity_score):
+    """
+    Detect when GPT might be hallucinating due to sign size/visibility issues.
+    Returns (has_issue, reason)
+    """
+    lower = text.lower()
+    
+    # Size/visibility issue indicators
+    size_issues = [
+        "small sign", "tiny sign", "distant sign", "far away",
+        "hard to make out", "difficult to see", "barely visible",
+        "too small", "can't quite", "squinting", "zoomed out"
+    ]
+    
+    # Obstruction indicators (removed "behind glass" and "through glass")
+    obstruction_issues = [
+        "behind grate", "behind gate", "security gate", "closed gate", 
+        "metal grate", "shutters", "covered", "obstructed", "blocked", 
+        "behind bars", "rolled down", "pulled down"
+    ]
+    
+    # Check for size issues
+    if any(issue in lower for issue in size_issues):
+        return True, "Sign too small to read reliably"
+    
+    # Check for obstructions (gates, grates, etc.)
+    if any(issue in lower for issue in obstruction_issues):
+        return True, "Sign obstructed by gate/grate/barrier"
+    
+    # Check for signs that GPT is estimating rather than reading
+    estimation_phrases = [
+        "appears to be", "seems to say", "looks like",
+        "probably says", "might be", "could be",
+        "standard hours", "typical hours", "usual hours",
+        "common for", "generally open", "usually open"
+    ]
+    
+    if any(phrase in lower for phrase in estimation_phrases):
+        return True, "GPT appears to be estimating rather than reading"
+    
+    # Check if sign description is too generic
+    generic_descriptions = [
+        "yellow sign",
+        "white sign",
+        "laminated sign",
+        "posted on window",
+        "next to door"
+    ]
+    
+    sign_desc_count = sum(1 for desc in generic_descriptions if desc in lower)
+    
+    # Look for specific descriptive details
+    specific_details = [
+        "inches", "feet", "cm", "large", "small",
+        "top left", "top right", "bottom left", "bottom right",
+        "above the", "below the", "corner", "center",
+        "handwritten", "printed", "digital", "neon",
+        "temporary", "permanent", "taped", "mounted",
+        "sticker", "decal", "frame", "board"
+    ]
+    specific_count = sum(1 for detail in specific_details if detail in lower)
+    
+    # If description is generic and lacks specific details, likely hallucination
+    if sign_desc_count > 0 and specific_count == 0:
+        return True, "Sign description too generic - likely hallucination"
+    
+    return False, None
+
+def validate_hours_extraction(text, posted_hours, clarity_score):
+    """
+    Additional validation to detect hallucinated hours.
+    """
+    lower = text.lower()
+    
+    # 1. Check for sign size/visibility issues
+    has_issue, issue_reason = detect_sign_size_issues(text, clarity_score)
+    if has_issue:
+        return False, issue_reason
+    
+    # 2. Check if too many days have identical hours (suspicious pattern)
+    if posted_hours and len(posted_hours) >= 5:
+        unique_patterns = set()
+        for day, hours in posted_hours.items():
+            if hours.get("start") and hours.get("end"):
+                pattern = f"{hours['start']}-{hours['end']}"
+                unique_patterns.add(pattern)
+        
+        # If all 7 days have exact same hours, suspicious unless explicitly stated
+        if len(unique_patterns) == 1 and len(posted_hours) == 7:
+            # Check if GPT specifically mentioned "every day" or "daily"
+            if not any(phrase in lower for phrase in ["every day", "everyday", "daily", "7 days", "open 7 days"]):
+                return False, "All 7 days identical but no 'every day' mentioned in sign"
+    
+    # 3. Check for "round" hours that are too convenient
+    round_hours_count = 0
+    for day, hours in posted_hours.items():
+        start = hours.get("start", "")
+        end = hours.get("end", "")
+        # Check if hours are "round" (on the hour)
+        if start and end:
+            if start.endswith(":00:00") and end.endswith(":00:00"):
+                round_hours_count += 1
+    
+    # Only suspicious if ALL hours are round AND no explicit text
+    if round_hours_count == len(posted_hours) and len(posted_hours) >= 5:
+        if "every day" not in lower and "daily" not in lower:
+            unique_patterns = set()
+            for day, hours in posted_hours.items():
+                if hours.get("start") and hours.get("end"):
+                    pattern = f"{hours['start']}-{hours['end']}"
+                    unique_patterns.add(pattern)
+            if len(unique_patterns) == 1:
+                return False, "All hours perfectly round without explicit daily hours mention"
+    
+    # 4. Detect common retail patterns that might be defaults
+    common_patterns = [
+        ("10:00:00", "21:00:00"),  # Common retail
+        ("09:00:00", "21:00:00"),  # Common retail
+        ("08:00:00", "22:00:00"),  # Common convenience
+        ("11:00:00", "20:00:00"),  # Common mall hours
+        ("10:00:00", "20:00:00"),  # Common retail
+    ]
+    
+    matches_common = False
+    for start_pattern, end_pattern in common_patterns:
+        matching_days = sum(
+            1 for hours in posted_hours.values()
+            if hours.get("start") == start_pattern and hours.get("end") == end_pattern
+        )
+        if matching_days >= 5:
+            matches_common = True
+            break
+    
+    # Only flag if matches common pattern AND clarity is low
+    if matches_common and clarity_score < 0.80:
+        return False, "Hours match common retail patterns with low clarity"
+    
+    # 5. Check if store is clearly closed/gated
+    closure_indicators = [
+        "security gate", "grate down", "closed", "shutters down",
+        "lights off", "dark store", "gate is down", "metal gate"
+    ]
+    
+    if any(indicator in lower for indicator in closure_indicators):
+        # If store appears closed/gated, hours shouldn't be readable
+        if len(posted_hours) >= 4:
+            return False, "Hours extracted despite store being closed/gated"
+    
+    # 6. Check for lack of location description
+    if len(posted_hours) >= 4:
+        location_phrases = [
+            "on the door", "on the window", "posted on", "displayed on",
+            "visible on", "located on", "found on", "shown on",
+            "next to", "beside", "above", "below", "left side", "right side"
+        ]
+        
+        has_location = any(phrase in lower for phrase in location_phrases)
+        if not has_location:
+            return False, "No description of where hours sign is located"
+    
+    return True, "Hours appear valid"
 
 def extract_hours(text):
     hours = {}
@@ -795,50 +1145,6 @@ def hour_change_confidence(parse_coverage, clarity):
     """Confidence score specifically for hour changes"""
     return round(max(0.0, min(1.0, 0.6*parse_coverage + 0.4*clarity)), 2)
 
-def is_permanent_closure(text):
-    """Check if the text indicates a permanent closure"""
-    lower = text.lower()
-    
-    # First check if it's a long-term temp closure (takes precedence)
-    if any(phrase in lower for phrase in long_term_closure_phrases):
-        return False
-    
-    strong_indicators = [
-        "permanently closing", "closed permanently", "permanent closure",
-        "permanently closed", "closing permanently", "will be permanently closing",
-        "this location is now permanently closed"
-    ]
-    
-    for phrase in strong_indicators:
-        if phrase in lower:
-            return True
-    
-    if "store closing" in lower:
-        permanent_context = [
-            "final", "last day", "we are closing",
-            "location is closing", "this store is closing"
-        ]
-        if any(ctx in lower for ctx in permanent_context):
-            return True
-    
-    return False
-
-def is_long_term_closure(text):
-    """Check if the text indicates a long-term temporary closure (until further notice)"""
-    lower = text.lower()
-    return any(phrase in lower for phrase in long_term_closure_phrases)
-
-def is_payment_issue(text):
-    """Check if the text indicates payment system issues"""
-    lower = text.lower()
-    return any(phrase in lower for phrase in payment_issue_phrases)
-
-def is_address_change(text):
-    """Check if the text indicates an address change/relocation - VERY STRICT"""
-    lower = text.lower()
-    # Must have very explicit phrases
-    return any(phrase in lower for phrase in address_change_phrases)
-
 def is_hours_hallucination(text, extracted_hours_count):
     """Detect if GPT hallucinated store hours without actually seeing them in the image"""
     lower = text.lower()
@@ -947,7 +1253,7 @@ def get_mode_data():
     print(f"✅ Retrieved {len(df)} unique stores\n")
     return df
 
-# ============= FUNCTION 2: PROCESS WITH OPENAI =============
+# ============= FUNCTION 2: PROCESS WITH OPENAI (UPDATED) =============
 def process_store_hours(df):
     print("\n🤖 Processing with OpenAI vision API...")
     
@@ -1055,6 +1361,22 @@ CRITICAL - IF YOU ARE READING STORE HOURS, YOU MUST ALSO:
 2. Describe what the sign looks like (e.g., "laminated white sign", "chalkboard", "digital display")
 3. Quote the exact text you see (e.g., "Monday-Friday 9:00 AM - 9:00 PM")
 4. If you CANNOT see hours at all, clearly state: "NO STORE HOURS VISIBLE"
+
+CRITICAL - SIGN SIZE AND VISIBILITY REQUIREMENTS:
+- The store hours sign must be at least 5% of the image to be readable
+- If the sign is behind grating or security gates, mark as "NOT READABLE"
+- Describe the EXACT size and position: "Small sign (approximately 2% of image) in top left"
+- If you cannot read ACTUAL text on the sign, say "NO STORE HOURS VISIBLE"
+- Never guess or use "typical" hours - only report what you can actually read
+
+HALLUCINATION CHECK:
+Ask yourself:
+1. Can I see individual letters/numbers clearly?
+2. Is the sign large enough to read without zooming?
+3. Is there any obstruction (gate, grate)?
+4. Am I reading actual text or inferring based on store type?
+
+If ANY answer suggests you cannot clearly read the sign, report "NO STORE HOURS VISIBLE"
 
 Examples of what NOT to do:
 ❌ Sign shows "Closes at 9 PM" → DO NOT assume opening time → DO NOT recommend hour change
@@ -1166,6 +1488,61 @@ Where X.XX is a number between 0.00 and 1.00 with TWO decimal places.
             posted = extract_hours(result)
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
+
+            # NEW: Check for GPT's explicit recommendation first
+            gpt_rec, found_rec = get_gpt_recommendation(result)
+            if found_rec and should_trust_gpt_recommendation(gpt_rec, clarity):
+                # Map GPT recommendation to our categories
+                gpt_to_action = {
+                    "no change": "No change",
+                    "change store hours": "Change Store Hours", 
+                    "temporarily close for day": "Temporarily Close For Day",
+                    "temporarily close for day - long term": "Temporarily Close For Day",
+                    "permanently close store": "Permanently Close Store",
+                    "address change": "Address Change"
+                }
+                
+                if gpt_rec in gpt_to_action:
+                    final_recommendation = gpt_to_action[gpt_rec]
+                    
+                    # Special handling for "No change"
+                    if final_recommendation == "No change":
+                        # Extract special holiday hours even for "No change"
+                        special_hours_extracted = extract_special_hours(result, clarity)
+                        if special_hours_extracted and clarity >= 0.90:
+                            special_hours_list.append(special_hours_extracted)
+                        else:
+                            special_hours_list.append([])
+                        
+                        recommendations.append("No change")
+                        reasons.append(reason)
+                        summary_reasons.append("No change required - hours match or unreadable")
+                        deactivation_reason_id.append("")
+                        is_temp_deactivation.append(False)
+                        confidence_scores.append(clarity)
+                        new_addresses.append("")
+                        temp_duration.append("")
+                        for day in bulk_hours:
+                            bulk_hours[day]["start"].append("")
+                            bulk_hours[day]["end"].append("")
+                        continue
+
+            # NEW: Validate hours extraction BEFORE processing
+            is_valid, validation_reason = validate_hours_extraction(result, posted, clarity)
+            if not is_valid and "change store hour" in lower:
+                recommendations.append("No change")
+                reasons.append(f"Hour extraction validation failed: {validation_reason}")
+                summary_reasons.append("Hours likely hallucinated or unreadable")
+                deactivation_reason_id.append("")
+                special_hours_list.append([])
+                is_temp_deactivation.append(False)
+                confidence_scores.append(0.10)
+                new_addresses.append("")
+                temp_duration.append("")
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+                continue
 
             # NEW: Extract special holiday hours with clarity score passed
             special_hours_extracted = extract_special_hours(result, clarity)
@@ -1916,7 +2293,7 @@ def create_bulk_upload_sheets(df):
     
     return address_change_bulk, perm_close_bulk, temp_close_bulk, change_hours_bulk, bulk_upload_special_hours
 
-# ============= FUNCTION 4: SEND TO SLACK (UPDATED) =============
+# ============= FUNCTION 4: SEND TO SLACK (UPDATED WITH BETTER FORMATTING) =============
 def send_to_slack(df, timestamp_str):
     print("\n📤 Sending to Slack...")
     
@@ -1941,39 +2318,45 @@ def send_to_slack(df, timestamp_str):
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
         total_stores = len(df)
         
-        # Build formatted summary
+        # Build formatted summary - UPDATED FOR CLEANER SLACK FORMAT
         summary_parts = []
-        summary_parts.append("*DRSC AI Stats:*")
-        summary_parts.append("")
-        summary_parts.append("*Store Hours Analysis Complete*")
+        summary_parts.append("DRSC AI Stats:")
+        summary_parts.append("Store Hours Analysis Complete")
         summary_parts.append(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        summary_parts.append(f"• Total stores analyzed: {total_stores}")
+        summary_parts.append("")  # Empty line for spacing
         
-        # Calculate percentages for each category
+        # Total stores
+        summary_parts.append(f"• *Total stores analyzed: {total_stores}*")
+        
+        # No Change
         no_change_count = rec_counts.get('No change', 0)
         no_change_pct = (no_change_count / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• No Change: {no_change_count} stores, {no_change_pct:.1f}% of total stores no change")
+        summary_parts.append(f"• *No Change*: {no_change_count} stores, {no_change_pct:.1f}% of total stores")
         
+        # Change Hours
         change_hours_count = len(change_hours_bulk)
         change_hours_pct = (change_hours_count / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• Change Hours: {change_hours_count} stores in Bulk_Upload_Change_Hours, {change_hours_pct:.1f}% of total stores with change hours")
+        summary_parts.append(f"• *Change Hours*: {change_hours_count} stores in Bulk_Upload_Change_Hours, {change_hours_pct:.1f}% of total stores")
         
+        # Temp Close
         temp_close_count = len(temp_close_bulk)
         temp_close_pct = (temp_close_count / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• Temp Close: {temp_close_count} stores in Bulk_Upload_Temp_Close, {temp_close_pct:.1f}% of total stores that are recommended temp close")
+        summary_parts.append(f"• *Temp Close*: {temp_close_count} stores in Bulk_Upload_Temp_Close, {temp_close_pct:.1f}% of total stores")
         
+        # Perm Close
         perm_close_count = len(perm_close_bulk)
         perm_close_pct = (perm_close_count / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• Perm Close: {perm_close_count} stores in Bulk_Upload_Perm_Close, {perm_close_pct:.1f}% of total stores that are recommended perm close")
+        summary_parts.append(f"• *Perm Close*: {perm_close_count} stores in Bulk_Upload_Perm_Close, {perm_close_pct:.1f}% of total stores")
         
+        # Address Change
         address_change_count = len(address_change_bulk)
         address_change_pct = (address_change_count / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• Update address: {address_change_count} stores in Flag_New_Address, {address_change_pct:.1f}% of total stores that are recommended to update address")
+        summary_parts.append(f"• *Update address*: {address_change_count} stores in Flag_New_Address, {address_change_pct:.1f}% of total stores")
         
-        # For special hours, count unique stores (since one store can have multiple special hour records)
+        # Special Hours
         special_hours_stores = bulk_upload_special_hours['store_id'].nunique() if len(bulk_upload_special_hours) > 0 else 0
         special_hours_pct = (special_hours_stores / total_stores * 100) if total_stores > 0 else 0
-        summary_parts.append(f"• Special Hours: {special_hours_stores} stores in Bulk_Upload_Special_Hours, {special_hours_pct:.1f}% of total stores that are recommended to add special hours for")
+        summary_parts.append(f"• *Special Hours*: {special_hours_stores} stores in Bulk_Upload_Special_Hours, {special_hours_pct:.1f}% of total stores")
         
         summary = "\n".join(summary_parts)
         

@@ -1,0 +1,39 @@
+name: Holiday Hours Analysis (One-Off)
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      days_back:
+        description: 'Number of days to look back'
+        required: false
+        default: '7'
+      
+jobs:
+  analyze-holiday-hours:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests
+        pip install pandas
+        pip install openai
+        pip install slack-sdk
+        pip install tqdm
+        pip install openpyxl
+        
+    - name: Run Holiday Hours Analysis
+      env:
+        MODE_TOKEN: ${{ secrets.MODE_TOKEN }}
+        MODE_SECRET: ${{ secrets.MODE_SECRET }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      run: |
+        python holiday_hours_analyzer.py

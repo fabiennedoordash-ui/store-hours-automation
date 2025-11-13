@@ -179,6 +179,57 @@ def hours_are_identical(posted_hours_dict, doordash_hours_str):
         print(f"Error comparing hours: {e}")
         return False
 
+def detect_glass_reflection_cases(text, clarity_score):
+    """
+    Special handling for cases where hours are clearly readable but 
+    clarity is lowered due to glass/reflection/glare
+    """
+    lower = text.lower()
+    
+    # Check if glass/reflection is mentioned
+    glass_indicators = [
+        "glass", "reflection", "glare", "window", "door",
+        "on the glass", "through glass", "on glass door", "visible through"
+    ]
+    
+    has_glass = any(ind in lower for ind in glass_indicators)
+    
+    # Check if specific hours are clearly stated - ENHANCED PATTERNS
+    hour_patterns = [
+        r'\d{1,2}\s*am\s*[-–]\s*\d{1,2}\s*pm',  # 6am - 10pm, 8 am - 9 pm
+        r'\d{1,2}am[-–]\d{1,2}pm',  # 6am-10pm, 8am-9pm
+        r'open\s+every\s+day',  # "open every day"
+        r'everyday',  # "everyday"
+        r'\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}',  # 06:00 - 22:00
+        r'mon[.\s-]*sat[.\s:]*\d{1,2}',  # Mon.-Sat.: 8
+        r'sun[.\s:]*\d{1,2}',  # Sun.: 8
+        r'hours:\s*\d{1,2}',  # hours: 8
+        r'hours\s*mon',  # hours monday
+    ]
+    
+    has_clear_hours = any(re.search(pattern, lower) for pattern in hour_patterns)
+    
+    # Additional check: if GPT explicitly states the hours in the response
+    explicit_hour_statements = [
+        "sign shows", "sign reads", "sign says", "displays",
+        "clearly shows", "clearly states", "states", "visible", "reads"
+    ]
+    has_explicit_statement = any(stmt in lower for stmt in explicit_hour_statements)
+    
+    # If hours are clearly stated but clarity is lowered due to glass, boost it
+    if (has_glass or has_explicit_statement) and has_clear_hours and 0.5 <= clarity_score < 0.90:
+        # This is likely a case where hours are readable but glass lowered clarity
+        return True, min(0.90, clarity_score + 0.30)  # Boost clarity by 0.30
+    
+    # Special cases for common patterns
+    if "open every day" in lower and ("am" in lower or "pm" in lower):
+        return True, min(0.90, clarity_score + 0.30)
+    
+    if "store hours" in lower and ("am" in lower or "pm" in lower):
+        return True, min(0.90, clarity_score + 0.30)
+    
+    return False, clarity_score
+
 def detect_sign_size_issues(text, clarity_score):
     """
     IMPROVED sign size/visibility detection - less strict for clear signs
@@ -225,6 +276,7 @@ def detect_sign_size_issues(text, clarity_score):
     hour_patterns = [
         r'\d{1,2}:\d{2}\s*[ap]m\s*-\s*\d{1,2}:\d{2}\s*[ap]m',  # 8:00am - 9:00pm
         r'\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}',  # 08:00 - 21:00
+        r'\d{1,2}\s*am\s*[-–]\s*\d{1,2}\s*pm',  # 8am - 10pm
         r'open\s+\d{1,2}',  # open 8
         r'everyday', r'every day'  # everyday/every day
     ]
@@ -280,6 +332,8 @@ def validate_gpt_extraction(result, clarity_score, recommendation):
     # Check if specific hours are mentioned
     specific_hours_mentioned = any([
         re.search(r'\d{1,2}:\d{2}', lower),  # Any time format
+        re.search(r'\d{1,2}\s*am', lower),  # 8am, 8 am
+        re.search(r'\d{1,2}\s*pm', lower),  # 9pm, 9 pm
         "am" in lower or "pm" in lower,
         "everyday" in lower or "every day" in lower
     ])
@@ -292,12 +346,13 @@ def validate_gpt_extraction(result, clarity_score, recommendation):
     # If recommending temp close but mentions open hours, that's wrong
     if recommendation == "Temporarily Close For Day":
         open_hours_patterns = [
-            "open 8", "8 a.m.", "8:00 am", "9:00 pm", "every day", "everyday",
-            "8:00am - 9:00pm", "hours:"
+            "open", "am", "pm", "every day", "everyday",
+            "hours:", "mon", "tue", "wed", "thu", "fri", "sat", "sun"
         ]
         if any(phrase in lower for phrase in open_hours_patterns):
-            # Store is showing hours, not closure
-            return "Change Store Hours", clarity_score, None
+            # Check if it's really showing hours vs closure
+            if "6am" in lower or "8am" in lower or "9am" in lower or "10pm" in lower:
+                return "Change Store Hours", clarity_score, None
     
     # If specific hours are mentioned with high clarity, trust it
     if "change store hours" in recommendation.lower():
@@ -746,13 +801,17 @@ SIGN TYPES TO LOOK FOR:
 - Large printed signs or boards
 - Window decals or stickers
 - Posted paper signs
+- Signs visible through glass doors/windows
 - Any clearly visible hours display
 
-IMPORTANT: If you can clearly read the hours on ANY type of sign (digital, printed, etc.), report them even if the sign location isn't traditional (door/window).
+IMPORTANT ABOUT GLASS/REFLECTIONS:
+- If store hours are visible through glass with some reflection/glare but still READABLE, report them
+- Glass doors often have reflections but if you can read the hours clearly, that's what matters
+- State: "Hours visible on glass door with some reflection but readable" if applicable
 
-For DIGITAL DISPLAYS or LARGE SIGNS:
-- These are typically very readable - report what you see
-- Describe them as "digital display" or "large sign board"
+For DIGITAL DISPLAYS, LARGE SIGNS, or SIGNS ON GLASS:
+- These are typically readable even with some glare - report what you see
+- Describe them accurately (e.g., "digital display", "large sign board", "sign on glass door")
 - State the exact hours shown
 
 Current DoorDash hours: {store_hours}
@@ -776,8 +835,8 @@ Choose ONE recommendation:
 - **No Change** - If hours are unreadable or match DoorDash hours
 
 CRITICAL RULES:
-- If you can read the hours clearly, report them
-- For digital displays or large prominent signs, always trust what you see
+- If you can read the hours clearly (even through glass), report them
+- For digital displays, large prominent signs, or glass door signs, always trust what you see
 - State exactly what the sign says (e.g., "8:00am - 9:00pm Everyday")
 - If sign is less than 10% of image and not digital/prominent, state "NO STORE HOURS VISIBLE - sign too small"
 - Never use phrases like "appears to be", "seems to say", "probably says"
@@ -807,6 +866,14 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             posted = extract_hours(result)
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
+            
+            # NEW: Check for glass/reflection cases where hours are still readable
+            glass_case, adjusted_clarity = detect_glass_reflection_cases(result, clarity)
+            if glass_case:
+                clarity = adjusted_clarity
+                # Log adjustment for transparency
+                if row.get('STORE_ID'):
+                    print(f"   Store {row.get('STORE_ID')}: Adjusted clarity for glass/reflection from {extract_clarity_score(result):.2f} to {clarity:.2f}")
 
             # CRITICAL: Check for sign size issues FIRST (IMPROVED VERSION)
             has_issue, issue_reason = detect_sign_size_issues(result, clarity)

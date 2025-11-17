@@ -770,7 +770,7 @@ def get_mode_data():
     print(f"✅ Retrieved {len(df)} unique stores\n")
     return df
 
-# ============= FUNCTION 2: PROCESS WITH OPENAI (FIXED) =============
+# ============= FUNCTION 2: PROCESS WITH OPENAI (FIXED LENGTH ISSUE) =============
 def process_store_hours(df):
     print("\n🤖 Processing with OpenAI vision API...")
     
@@ -785,26 +785,34 @@ def process_store_hours(df):
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
     ]}
     
+    # Helper function to append default values
+    def append_default_values():
+        recommendations.append("No change")
+        reasons.append("Processing error or skipped")
+        summary_reasons.append("Processing error or skipped")
+        deactivation_reason_id.append("")
+        is_temp_deactivation.append(False)
+        confidence_scores.append(0.0)
+        new_addresses.append("")
+        temp_duration.append("")
+        special_hours_list.append([])
+        for day in bulk_hours:
+            bulk_hours[day]["start"].append("")
+            bulk_hours[day]["end"].append("")
+    
     for i, row in tqdm(df.iterrows(), total=len(df)):
-        image_url = row.get("IMAGE_URL")
-        store_hours = str(row.get("STORE_HOURS", ""))
+        # Flag to track if we've processed this row
+        row_processed = False
+        
+        try:
+            image_url = row.get("IMAGE_URL")
+            store_hours = str(row.get("STORE_HOURS", ""))
 
-        if not image_url or not store_hours:
-            recommendations.append("No change")
-            reasons.append("Missing image or hours")
-            summary_reasons.append("Missing image or hours")
-            deactivation_reason_id.append("")
-            is_temp_deactivation.append(False)
-            confidence_scores.append(0.0)
-            new_addresses.append("")
-            temp_duration.append("")
-            special_hours_list.append([])
-            for day in bulk_hours:
-                bulk_hours[day]["start"].append("")
-                bulk_hours[day]["end"].append("")
-            continue
+            if not image_url or not store_hours:
+                append_default_values()
+                continue
 
-        prompt = f"""
+            prompt = f"""
 You are reviewing a Dasher photo of a store entrance. 
 
 SIGN TYPES TO LOOK FOR:
@@ -856,7 +864,6 @@ At the end, provide:
 Clarity score: X.XX (0.00-1.00, two decimal places)
 """
 
-        try:
             response = openai.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -881,15 +888,14 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             # Get GPT's recommendation EARLY
             gpt_rec, found_rec = get_gpt_recommendation(result)
             
-            # NEW: Check for glass/reflection cases where hours are still readable
+            # Check for glass/reflection cases where hours are still readable
             glass_case, adjusted_clarity = detect_glass_reflection_cases(result, clarity)
             if glass_case:
                 clarity = adjusted_clarity
-                # Log adjustment for transparency
                 if row.get('STORE_ID'):
                     print(f"   Store {row.get('STORE_ID')}: Adjusted clarity for glass/reflection from {extract_clarity_score(result):.2f} to {clarity:.2f}")
 
-            # CRITICAL: Check for sign size issues FIRST (IMPROVED VERSION)
+            # Check for sign size issues FIRST (IMPROVED VERSION)
             has_issue, issue_reason = detect_sign_size_issues(result, clarity)
             if has_issue:
                 recommendations.append("No change")
@@ -904,6 +910,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # Check if hours are actually identical to DoorDash
@@ -921,8 +928,8 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
-
             
             # Validate the extraction (FIXED VERSION)
             final_rec, final_clarity, validation_reason = validate_gpt_extraction(result, clarity, gpt_rec if found_rec else "")
@@ -940,6 +947,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # Extract special hours (only with high clarity)
@@ -959,6 +967,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # FIXED: Check if GPT explicitly recommended something valid
@@ -973,6 +982,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     "no change": "No change"
                 }
                 
+                action_taken = False
                 for key, action in rec_mapping.items():
                     if key in gpt_rec:
                         if action == "Temporarily Close For Day":
@@ -990,6 +1000,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                             for day in bulk_hours:
                                 bulk_hours[day]["start"].append("")
                                 bulk_hours[day]["end"].append("")
+                            action_taken = True
                             break
                         elif action == "Change Store Hours" and len(posted) >= 4:
                             recommendations.append("Change Store Hours")
@@ -1006,6 +1017,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                                 raw_end = posted.get(day, {}).get("end", "")
                                 bulk_hours[day]["start"].append(normalize_time(raw_start))
                                 bulk_hours[day]["end"].append(normalize_time(raw_end))
+                            action_taken = True
                             break
                         elif action == "Permanently Close Store":
                             recommendations.append("Permanently Close Store")
@@ -1020,6 +1032,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                             for day in bulk_hours:
                                 bulk_hours[day]["start"].append("")
                                 bulk_hours[day]["end"].append("")
+                            action_taken = True
                             break
                         elif action == "Address Change":
                             new_addr = extract_new_address(result)
@@ -1035,6 +1048,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                             for day in bulk_hours:
                                 bulk_hours[day]["start"].append("")
                                 bulk_hours[day]["end"].append("")
+                            action_taken = True
                             break
                         elif action == "No change":
                             recommendations.append("No change")
@@ -1049,13 +1063,11 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                             for day in bulk_hours:
                                 bulk_hours[day]["start"].append("")
                                 bulk_hours[day]["end"].append("")
+                            action_taken = True
                             break
-                else:
-                    # Didn't match any specific mapping, continue to priority checks
-                    pass
                 
-                # If we matched something, continue to next store
-                if recommendations and recommendations[-1] != "":
+                if action_taken:
+                    row_processed = True
                     continue
             
             # Process recommendations by priority (as fallback if GPT rec didn't work)
@@ -1075,6 +1087,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 new_addr = extract_new_address(result)
@@ -1090,6 +1103,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # LONG-TERM CLOSURE
@@ -1107,6 +1121,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 recommendations.append("Temporarily Close For Day")
@@ -1121,6 +1136,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # PERMANENT CLOSURE
@@ -1138,6 +1154,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 recommendations.append("Permanently Close Store")
@@ -1152,6 +1169,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # PAYMENT ISSUES (STRICTER)
@@ -1169,6 +1187,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 recommendations.append("Temporarily Close For Day")
@@ -1183,6 +1202,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # TEMPORARY CLOSURE
@@ -1206,6 +1226,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 recommendations.append("Temporarily Close For Day")
@@ -1220,6 +1241,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
+                row_processed = True
                 continue
 
             # HOUR CHANGES (Using 0.90 clarity as requested)
@@ -1238,6 +1260,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 # Need at least 4 days extracted
@@ -1254,6 +1277,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     for day in bulk_hours:
                         bulk_hours[day]["start"].append("")
                         bulk_hours[day]["end"].append("")
+                    row_processed = True
                     continue
                 
                 recommendations.append("Change Store Hours")
@@ -1270,6 +1294,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     raw_end = posted.get(day, {}).get("end", "")
                     bulk_hours[day]["start"].append(normalize_time(raw_start))
                     bulk_hours[day]["end"].append(normalize_time(raw_end))
+                row_processed = True
                 continue
 
             # Default: No change
@@ -1285,25 +1310,40 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             for day in bulk_hours:
                 bulk_hours[day]["start"].append("")
                 bulk_hours[day]["end"].append("")
+            row_processed = True
 
         except Exception as e:
             error_msg = str(e)
-            recommendations.append("Error")
-            reasons.append(f"Exception: {error_msg}")
-            summary_reasons.append("Processing error")
-            deactivation_reason_id.append("")
-            is_temp_deactivation.append(False)
-            confidence_scores.append(0.0)
-            new_addresses.append("")
-            temp_duration.append("")
-            special_hours_list.append([])
-            for day in bulk_hours:
-                bulk_hours[day]["start"].append("")
-                bulk_hours[day]["end"].append("")
-            
+            print(f"⚠️ Row {i}: {error_msg[:100]}")
             import traceback
             traceback.print_exc()
-            print(f"⚠️ Row {i}: {error_msg[:100]}")
+            
+            # If we haven't processed this row yet, add default values
+            if not row_processed:
+                recommendations.append("Error")
+                reasons.append(f"Exception: {error_msg[:200]}")
+                summary_reasons.append("Processing error")
+                deactivation_reason_id.append("")
+                is_temp_deactivation.append(False)
+                confidence_scores.append(0.0)
+                new_addresses.append("")
+                temp_duration.append("")
+                special_hours_list.append([])
+                for day in bulk_hours:
+                    bulk_hours[day]["start"].append("")
+                    bulk_hours[day]["end"].append("")
+    
+    # Verify all lists have the same length
+    expected_length = len(df)
+    assert len(recommendations) == expected_length, f"recommendations has {len(recommendations)} items, expected {expected_length}"
+    assert len(reasons) == expected_length, f"reasons has {len(reasons)} items, expected {expected_length}"
+    assert len(summary_reasons) == expected_length, f"summary_reasons has {len(summary_reasons)} items, expected {expected_length}"
+    assert len(deactivation_reason_id) == expected_length, f"deactivation_reason_id has {len(deactivation_reason_id)} items, expected {expected_length}"
+    assert len(is_temp_deactivation) == expected_length, f"is_temp_deactivation has {len(is_temp_deactivation)} items, expected {expected_length}"
+    assert len(confidence_scores) == expected_length, f"confidence_scores has {len(confidence_scores)} items, expected {expected_length}"
+    assert len(new_addresses) == expected_length, f"new_addresses has {len(new_addresses)} items, expected {expected_length}"
+    assert len(temp_duration) == expected_length, f"temp_duration has {len(temp_duration)} items, expected {expected_length}"
+    assert len(special_hours_list) == expected_length, f"special_hours_list has {len(special_hours_list)} items, expected {expected_length}"
     
     # Assign results
     df["RECOMMENDATION"] = recommendations
@@ -1533,7 +1573,7 @@ def send_to_slack(df, timestamp_str):
 # ============= MAIN EXECUTION =============
 if __name__ == "__main__":
     print("="*60)
-    print("AUTOMATED STORE HOURS ANALYSIS - FIXED VERSION")
+    print("AUTOMATED STORE HOURS ANALYSIS - FIXED VERSION V2")
     print("="*60 + "\n")
     
     try:

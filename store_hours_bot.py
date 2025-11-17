@@ -325,7 +325,7 @@ def detect_sign_size_issues(text, clarity_score):
 
 def validate_gpt_extraction(result, clarity_score, recommendation):
     """
-    IMPROVED validation - less strict for clear cases
+    FIXED validation - properly handle GPT's recommendations
     """
     lower = result.lower()
     
@@ -343,18 +343,20 @@ def validate_gpt_extraction(result, clarity_score, recommendation):
     if clarity_score > 0.8 and any(term in lower for term in uncertain_terms):
         return "No change", 0.3, "Uncertain language despite high clarity claim"
     
-    # If recommending temp close but mentions open hours, that's wrong
-    if recommendation == "Temporarily Close For Day":
-        open_hours_patterns = [
-            "open", "am", "pm", "every day", "everyday",
-            "hours:", "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+    # FIXED: Don't override temp close recommendations if they're valid
+    if "temporarily close" in recommendation.lower():
+        # Check if there's actually evidence of closure
+        closure_indicators = [
+            "systems are down", "closed", "power out", "no power",
+            "cash only", "registers down", "maintenance", "until further notice",
+            "temporarily closed", "closed for", "sorry", "inconvenience"
         ]
-        if any(phrase in lower for phrase in open_hours_patterns):
-            # Check if it's really showing hours vs closure
-            if "6am" in lower or "8am" in lower or "9am" in lower or "10pm" in lower:
-                return "Change Store Hours", clarity_score, None
+        
+        if any(indicator in lower for indicator in closure_indicators):
+            # This is a valid temp closure - don't override!
+            return recommendation, clarity_score, None
     
-    # If specific hours are mentioned with high clarity, trust it
+    # If specific hours are mentioned with high clarity for hours change, trust it
     if "change store hours" in recommendation.lower():
         if specific_hours_mentioned and clarity_score >= 0.85:
             # Don't require strict location for obvious cases
@@ -500,21 +502,26 @@ def extract_new_address(text):
     return ""
 
 def get_gpt_recommendation(text):
-    """Extract the explicit recommendation from GPT's response"""
+    """Extract the explicit recommendation from GPT's response - IMPROVED"""
     lower = text.lower()
     
     patterns = [
         r"recommendation:\s*\*\*([^*]+)\*\*",
         r"recommendation:\s*([^\n]+)",
         r"recommend:\s*\*\*([^*]+)\*\*",
-        r"recommend:\s*([^\n]+)"
+        r"recommend:\s*([^\n]+)",
+        r"\*\*([^*]+)\*\*"  # Sometimes just in bold
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, lower)
-        if match:
-            recommendation = match.group(1).strip()
-            return recommendation, True
+        matches = re.findall(pattern, lower)
+        for match in matches:
+            # Check if this is actually a recommendation
+            if any(rec in match for rec in ["temporarily close", "permanently close", 
+                                             "change store hours", "no change", 
+                                             "address change", "long term"]):
+                recommendation = match.strip()
+                return recommendation, True
     
     return "", False
 
@@ -522,6 +529,10 @@ def should_trust_gpt_recommendation(gpt_recommendation, clarity_score):
     """Determine if we should trust GPT's explicit recommendation"""
     if not gpt_recommendation:
         return False
+    
+    # FIXED: Lower threshold for temp closures
+    if "temporarily close" in gpt_recommendation:
+        return clarity_score >= 0.70  # Lower threshold for temp closures
     
     if clarity_score < 0.70:
         return False
@@ -535,7 +546,7 @@ def should_trust_gpt_recommendation(gpt_recommendation, clarity_score):
         "address change": "Address Change"
     }
     
-    return gpt_recommendation in gpt_to_action
+    return any(key in gpt_recommendation for key in gpt_to_action)
 
 def extract_hours(text):
     hours = {}
@@ -759,7 +770,7 @@ def get_mode_data():
     print(f"✅ Retrieved {len(df)} unique stores\n")
     return df
 
-# ============= FUNCTION 2: PROCESS WITH OPENAI (UPDATED) =============
+# ============= FUNCTION 2: PROCESS WITH OPENAI (FIXED) =============
 def process_store_hours(df):
     print("\n🤖 Processing with OpenAI vision API...")
     
@@ -867,6 +878,9 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             parse_coverage = confidence_from_hours(posted)
             clarity = extract_clarity_score(result)
             
+            # Get GPT's recommendation EARLY
+            gpt_rec, found_rec = get_gpt_recommendation(result)
+            
             # NEW: Check for glass/reflection cases where hours are still readable
             glass_case, adjusted_clarity = detect_glass_reflection_cases(result, clarity)
             if glass_case:
@@ -909,10 +923,8 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                         bulk_hours[day]["end"].append("")
                     continue
 
-            # Get GPT's recommendation
-            gpt_rec, found_rec = get_gpt_recommendation(result)
             
-            # Validate the extraction (IMPROVED VERSION)
+            # Validate the extraction (FIXED VERSION)
             final_rec, final_clarity, validation_reason = validate_gpt_extraction(result, clarity, gpt_rec if found_rec else "")
             
             if validation_reason:
@@ -949,7 +961,104 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                     bulk_hours[day]["end"].append("")
                 continue
 
-            # Process recommendations by priority
+            # FIXED: Check if GPT explicitly recommended something valid
+            if found_rec and should_trust_gpt_recommendation(gpt_rec, clarity):
+                # Map GPT recommendation to action
+                rec_mapping = {
+                    "temporarily close for day": "Temporarily Close For Day",
+                    "temporarily close for day - long term": "Temporarily Close For Day",
+                    "permanently close store": "Permanently Close Store",
+                    "change store hours": "Change Store Hours",
+                    "address change": "Address Change",
+                    "no change": "No change"
+                }
+                
+                for key, action in rec_mapping.items():
+                    if key in gpt_rec:
+                        if action == "Temporarily Close For Day":
+                            # Handle temp closures
+                            is_long_term = "long term" in gpt_rec or is_long_term_closure(result)
+                            recommendations.append("Temporarily Close For Day")
+                            reasons.append(reason)
+                            summary_reasons.append(categorize_closure(lower))
+                            deactivation_reason_id.append("67")
+                            special_hours_list.append(special_hours_extracted)
+                            is_temp_deactivation.append(True)
+                            confidence_scores.append(max(0.80, clarity))
+                            new_addresses.append("")
+                            temp_duration.append(700 if is_long_term else 12)
+                            for day in bulk_hours:
+                                bulk_hours[day]["start"].append("")
+                                bulk_hours[day]["end"].append("")
+                            break
+                        elif action == "Change Store Hours" and len(posted) >= 4:
+                            recommendations.append("Change Store Hours")
+                            reasons.append(reason)
+                            summary_reasons.append("Posted hours differ from DoorDash")
+                            deactivation_reason_id.append("")
+                            special_hours_list.append(special_hours_extracted)
+                            is_temp_deactivation.append(False)
+                            confidence_scores.append(hour_change_confidence(parse_coverage, clarity))
+                            new_addresses.append("")
+                            temp_duration.append("")
+                            for day in bulk_hours:
+                                raw_start = posted.get(day, {}).get("start", "")
+                                raw_end = posted.get(day, {}).get("end", "")
+                                bulk_hours[day]["start"].append(normalize_time(raw_start))
+                                bulk_hours[day]["end"].append(normalize_time(raw_end))
+                            break
+                        elif action == "Permanently Close Store":
+                            recommendations.append("Permanently Close Store")
+                            reasons.append(reason)
+                            summary_reasons.append("Permanent closure detected")
+                            deactivation_reason_id.append("23")
+                            special_hours_list.append(special_hours_extracted)
+                            is_temp_deactivation.append(False)
+                            confidence_scores.append(0.95)
+                            new_addresses.append("")
+                            temp_duration.append("")
+                            for day in bulk_hours:
+                                bulk_hours[day]["start"].append("")
+                                bulk_hours[day]["end"].append("")
+                            break
+                        elif action == "Address Change":
+                            new_addr = extract_new_address(result)
+                            recommendations.append("Address Change")
+                            reasons.append(reason)
+                            summary_reasons.append("Store relocation detected")
+                            deactivation_reason_id.append("")
+                            special_hours_list.append(special_hours_extracted)
+                            is_temp_deactivation.append(False)
+                            confidence_scores.append(max(0.85, clarity))
+                            new_addresses.append(new_addr)
+                            temp_duration.append("")
+                            for day in bulk_hours:
+                                bulk_hours[day]["start"].append("")
+                                bulk_hours[day]["end"].append("")
+                            break
+                        elif action == "No change":
+                            recommendations.append("No change")
+                            reasons.append(reason)
+                            summary_reasons.append("No change required")
+                            deactivation_reason_id.append("")
+                            special_hours_list.append(special_hours_extracted)
+                            is_temp_deactivation.append(False)
+                            confidence_scores.append(clarity)
+                            new_addresses.append("")
+                            temp_duration.append("")
+                            for day in bulk_hours:
+                                bulk_hours[day]["start"].append("")
+                                bulk_hours[day]["end"].append("")
+                            break
+                else:
+                    # Didn't match any specific mapping, continue to priority checks
+                    pass
+                
+                # If we matched something, continue to next store
+                if recommendations and recommendations[-1] != "":
+                    continue
+            
+            # Process recommendations by priority (as fallback if GPT rec didn't work)
             
             # ADDRESS CHANGE (keeping strict 0.92 for address changes)
             if is_address_change(result):
@@ -1079,7 +1188,8 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             # TEMPORARY CLOSURE
             temp_closure_phrases = [
                 "closed for the day", "closed today", "closed due to",
-                "power out", "no power", "maintenance", "system down"
+                "power out", "no power", "maintenance", "system down",
+                "systems are down", "all systems are down", "sorry", "inconvenience"
             ]
             
             if any(phrase in lower for phrase in temp_closure_phrases):
@@ -1423,7 +1533,7 @@ def send_to_slack(df, timestamp_str):
 # ============= MAIN EXECUTION =============
 if __name__ == "__main__":
     print("="*60)
-    print("AUTOMATED STORE HOURS ANALYSIS - IMPROVED VERSION")
+    print("AUTOMATED STORE HOURS ANALYSIS - FIXED VERSION")
     print("="*60 + "\n")
     
     try:

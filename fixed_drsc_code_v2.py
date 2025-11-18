@@ -1108,7 +1108,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
 
             # LONG-TERM CLOSURE
             if is_long_term_closure(result):
-                if clarity < 0.75:
+                if clarity < 0.70:
                     recommendations.append("No change")
                     reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low")
@@ -1174,7 +1174,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
 
             # PAYMENT ISSUES (STRICTER)
             if is_payment_issue(result):
-                if clarity < 0.75:
+                if clarity < 0.70:
                     recommendations.append("No change")
                     reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low")
@@ -1213,7 +1213,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
             ]
             
             if any(phrase in lower for phrase in temp_closure_phrases):
-                if clarity < 0.75:
+                if clarity < 0.70:
                     recommendations.append("No change")
                     reasons.append(f"Clarity too low ({clarity:.2f} < 0.75)")
                     summary_reasons.append("Clarity too low")

@@ -105,8 +105,8 @@ def extract_clarity_score(text):
 
 # ============= MAIN FUNCTIONS =============
 def get_mode_data():
-    """Fetch last 7 days of DRSC data from Mode"""
-    print("\n🔄 Fetching last 7 days of data from Mode...")
+    """Fetch last 3 days of DRSC data from Mode"""
+    print("\n🔄 Fetching last 3 days of data from Mode...")
     
     run_url = f'https://app.mode.com/api/{MODE_ACCOUNT}/reports/{REPORT_ID}/runs'
     response = requests.post(run_url, auth=(MODE_TOKEN, MODE_SECRET))
@@ -392,7 +392,7 @@ def send_to_slack(filename, summary_df):
 🎄 *Holiday Hours Trend Analysis Complete (2025 Season)*
 
 📊 *Summary:*
-- Analyzed 7 days of DRSC images
+- Analyzed 3 days of DRSC images
 - Found holiday hours for {total_businesses} businesses
 - {total_detections} business/holiday combinations detected
 
@@ -450,7 +450,7 @@ if __name__ == "__main__":
                     count = summary_df[summary_df['Business Name'] == biz]['Stores Reporting'].sum()
                     print(f"   - {biz}: {count} store detections")
         else:
-            print("\n⚠️ No holiday hours detected in the last 7 days of images")
+            print("\n⚠️ No holiday hours detected in the last 3 days of images")
             print("   This could mean:")
             print("   - Stores haven't posted holiday hours yet")
             print("   - Images don't clearly show holiday signage")

@@ -13,16 +13,15 @@ MODE_TOKEN = os.environ.get('MODE_TOKEN')
 MODE_SECRET = os.environ.get('MODE_SECRET')
 MODE_ACCOUNT = 'doordash'
 REPORT_ID = 'e908b96aa50a'
-QUERY_ID = 'ed50b2101c26'
 
 SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN')
 SLACK_CHANNEL_ID = 'C098G9URHEV'  # #daily-ai-drsc-experiment - update if different
 
 # User IDs for @mentions (update these with actual Slack user IDs)
 # To find user IDs: In Slack, click on user profile > More > Copy member ID
-RACHEL_USER_ID = 'U02LRRS6SJV'  # Replace with Rachel Weinbren's Slack user ID
-SHAAN_USER_ID = 'U030P474TU5'   # Replace with Shaan's Slack user ID
-FABIENNE_USER_ID = 'U02NGA5G1GV'  # Replace with Fabienne's Slack user ID
+RACHEL_USER_ID = 'U02LRRS6SJV'  # Rachel Weinbren
+SHAAN_USER_ID = 'U030P474TU5'   # Shaan
+FABIENNE_USER_ID = 'U02NGA5G1GV'  # Fabienne
 
 
 # ============= MODE API FUNCTIONS =============
@@ -59,8 +58,23 @@ def wait_for_report(run_token, max_wait=300):
 
 def get_query_results(run_token):
     """Fetch CSV results from the completed Mode query."""
-    url = f"https://app.mode.com/api/{MODE_ACCOUNT}/reports/{REPORT_ID}/runs/{run_token}/queries/{QUERY_ID}/results/content.csv"
-    response = requests.get(url, auth=(MODE_TOKEN, MODE_SECRET))
+    # First, get the list of query runs to find the correct query token
+    queries_url = f"https://app.mode.com/api/{MODE_ACCOUNT}/reports/{REPORT_ID}/runs/{run_token}/query_runs"
+    response = requests.get(queries_url, auth=(MODE_TOKEN, MODE_SECRET))
+    response.raise_for_status()
+    
+    query_runs = response.json()['_embedded']['query_runs']
+    
+    if not query_runs:
+        raise Exception("No query runs found in report")
+    
+    # Get the first query's token (since this report has one query)
+    query_run_token = query_runs[0]['token']
+    print(f"   Found query run token: {query_run_token}")
+    
+    # Now fetch the results using the query run token
+    results_url = f"https://app.mode.com/api/{MODE_ACCOUNT}/reports/{REPORT_ID}/runs/{run_token}/query_runs/{query_run_token}/results/content.csv"
+    response = requests.get(results_url, auth=(MODE_TOKEN, MODE_SECRET))
     response.raise_for_status()
     return response.text
 

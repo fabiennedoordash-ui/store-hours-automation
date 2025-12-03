@@ -20,9 +20,9 @@ SLACK_CHANNEL_ID = 'C098G9URHEV'  # #daily-ai-drsc-experiment - update if differ
 
 # User IDs for @mentions (update these with actual Slack user IDs)
 # To find user IDs: In Slack, click on user profile > More > Copy member ID
-RACHEL_USER_ID = 'UXXXXXXXXXX'  # Replace with Rachel Weinbren's Slack user ID
-SHAAN_USER_ID = 'UXXXXXXXXXX'   # Replace with Shaan's Slack user ID
-FABIENNE_USER_ID = 'UXXXXXXXXXX'  # Replace with Fabienne's Slack user ID
+RACHEL_USER_ID = 'U02LRRS6SJV'  # Replace with Rachel Weinbren's Slack user ID
+SHAAN_USER_ID = 'U030P474TU5'   # Replace with Shaan's Slack user ID
+FABIENNE_USER_ID = 'U02NGA5G1GV'  # Replace with Fabienne's Slack user ID
 
 
 # ============= MODE API FUNCTIONS =============

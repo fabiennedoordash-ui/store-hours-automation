@@ -1,0 +1,33 @@
+name: FD Temp Deactivation Daily Alert
+
+on:
+  schedule:
+    # Run daily at 11am EST (16:00 UTC)
+    # Note: During daylight saving (EDT), this will run at 12pm EDT
+    # Adjust to '0 15 * * *' during summer if you need exactly 11am EDT
+    - cron: '0 16 * * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests pandas slack-sdk
+      
+      - name: Run FD temp deactivation check
+        env:
+          MODE_TOKEN: ${{ secrets.MODE_TOKEN }}
+          MODE_SECRET: ${{ secrets.MODE_SECRET }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python fd_temp_deactivation_bot.py

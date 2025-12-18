@@ -34,35 +34,102 @@ print(f"   MODE_SECRET: {'Set' if MODE_SECRET else 'MISSING'}")
 print(f"   OPENAI_API_KEY: {'Set' if openai.api_key else 'MISSING'}")
 print(f"   SLACK_BOT_TOKEN: {'Set' if SLACK_BOT_TOKEN else 'MISSING'}")
 
-# ============= HOLIDAY CONFIGURATION FOR 2025 =============
-TARGET_HOLIDAYS = [
-    'Thanksgiving',
-    'Black Friday', 
-    'Christmas Eve',
-    'Christmas Day',
-    "New Year's Eve",
-    "New Year's Day"
-]
+# ============= HOLIDAY CONFIGURATION FOR 2025/2026 =============
+def get_holiday_config(year=None):
+    """
+    Get holiday dates and monitoring windows.
+    Each holiday has a monitoring window that starts a few days before.
+    """
+    if year is None:
+        year = datetime.date.today().year
+    
+    return {
+        'Christmas Eve': {
+            'date': datetime.date(year, 12, 24),
+            'monitor_start': datetime.date(year, 12, 20),  # Start monitoring 4 days before
+            'emoji': '🎄'
+        },
+        'Christmas Day': {
+            'date': datetime.date(year, 12, 25),
+            'monitor_start': datetime.date(year, 12, 20),
+            'emoji': '🎄'
+        },
+        "New Year's Eve": {
+            'date': datetime.date(year, 12, 31),
+            'monitor_start': datetime.date(year, 12, 27),  # Start monitoring 4 days before
+            'emoji': '🎉'
+        },
+        "New Year's Day": {
+            'date': datetime.date(year + 1, 1, 1),
+            'monitor_start': datetime.date(year, 12, 27),
+            'emoji': '🎉'
+        },
+    }
+
+def get_active_holidays(check_date=None):
+    """
+    Return list of holidays we should be monitoring for on a given date.
+    Returns holidays where check_date falls within their monitoring window.
+    """
+    if check_date is None:
+        check_date = datetime.date.today()
+    
+    # Check current year and handle year boundary
+    configs_to_check = [get_holiday_config(check_date.year)]
+    if check_date.month == 1:
+        # In January, also check previous year's config for NYE/NYD
+        configs_to_check.append(get_holiday_config(check_date.year - 1))
+    
+    active = []
+    for config in configs_to_check:
+        for holiday_name, holiday_info in config.items():
+            monitor_start = holiday_info['monitor_start']
+            holiday_date = holiday_info['date']
+            
+            # Active if we're between monitor_start and holiday_date (inclusive)
+            if monitor_start <= check_date <= holiday_date:
+                active.append({
+                    'name': holiday_name,
+                    'date': holiday_date,
+                    'emoji': holiday_info['emoji'],
+                    'days_until': (holiday_date - check_date).days
+                })
+    
+    return active
+
+def is_monitoring_period(check_date=None):
+    """Check if we're in any holiday monitoring period."""
+    return len(get_active_holidays(check_date)) > 0
+
+def get_target_holidays_for_analysis(check_date=None):
+    """Get the list of holiday names to look for in images based on current date."""
+    active = get_active_holidays(check_date)
+    return [h['name'] for h in active]
 
 # ============= HELPER FUNCTIONS =============
-def get_holiday_date(holiday_name):
-    """Get the date for a given holiday in 2025/2026"""
-    dates = {
-        'Thanksgiving': datetime.date(2025, 11, 27),  # Thursday
-        'Black Friday': datetime.date(2025, 11, 28),   # Friday
-        'Christmas Eve': datetime.date(2025, 12, 24),  # Wednesday
-        'Christmas Day': datetime.date(2025, 12, 25),  # Thursday
-        "New Year's Eve": datetime.date(2025, 12, 31), # Wednesday
-        "New Year's Day": datetime.date(2026, 1, 1)    # Thursday
-    }
-    return dates.get(holiday_name)
+def get_holiday_date(holiday_name, year=None):
+    """Get the date for a given holiday"""
+    if year is None:
+        year = datetime.date.today().year
+    
+    config = get_holiday_config(year)
+    if holiday_name in config:
+        return config[holiday_name]['date']
+    
+    # Check next year for New Year's Day
+    if holiday_name == "New Year's Day":
+        next_config = get_holiday_config(year)
+        if holiday_name in next_config:
+            return next_config[holiday_name]['date']
+    
+    return None
 
-def extract_holiday_hours(text):
-    """Extract holiday hours with strict validation"""
+def extract_holiday_hours(text, target_holidays):
+    """Extract holiday hours with strict validation - only for target holidays"""
     holiday_hours = {}
     
     # Look for specific holiday mentions with hours
-    for holiday in TARGET_HOLIDAYS:
+    for holiday in target_holidays:
         holiday_lower = holiday.lower()
         text_lower = text.lower()
         
@@ -147,15 +214,19 @@ def get_mode_data():
     print(f"✅ Retrieved {len(df)} store images from {df['BUSINESS_NAME'].nunique()} businesses\n")
     return df
 
-def analyze_holiday_hours(df):
+def analyze_holiday_hours(df, target_holidays):
     """Analyze images for holiday hours only"""
     print("\n🤖 Analyzing images for holiday hours...")
+    print(f"   Looking for: {', '.join(target_holidays)}")
     
     # Group by business to show progress
     businesses = df['BUSINESS_NAME'].unique()
     print(f"   Processing {len(businesses)} unique businesses...")
     
     results = []
+    
+    # Build dynamic holiday list for prompt
+    holiday_list = "\n".join([f"- {h}" for h in target_holidays])
     
     for i, row in tqdm(df.iterrows(), total=len(df)):
         image_url = row.get("IMAGE_URL")
@@ -165,17 +236,12 @@ def analyze_holiday_hours(df):
         if not image_url or image_confidence < 0.5:
             continue
         
-        # Focused prompt for holiday hours only - Updated for 2025
+        # Dynamic prompt based on which holidays we're monitoring
         prompt = f"""
 You are analyzing a store entrance photo to identify ONLY holiday hours announcements.
 
 FOCUS: Look ONLY for signs about these specific holidays:
-- Thanksgiving (Nov 27, 2025)
-- Black Friday (Nov 28, 2025)
-- Christmas Eve (Dec 24, 2025)
-- Christmas Day (Dec 25, 2025)
-- New Year's Eve (Dec 31, 2025)
-- New Year's Day (Jan 1, 2026)
+{holiday_list}
 
 WHAT TO LOOK FOR:
 1. Posted signs with holiday hours
@@ -188,10 +254,9 @@ List each holiday and its hours in this format:
 [Holiday Name]: [Hours or CLOSED or Regular Hours]
 
 Examples:
-- Thanksgiving: CLOSED
-- Black Friday: 8:00 AM - 10:00 PM
 - Christmas Eve: 9:00 AM - 6:00 PM
 - Christmas Day: CLOSED
+- New Year's Eve: 10:00 AM - 8:00 PM
 - New Year's Day: Regular Hours
 
 IMPORTANT:
@@ -223,7 +288,7 @@ Clarity score: X.XX (rating from 0.00 to 1.00)
             
             # Only process high-clarity results
             if clarity >= 0.90 and "NO HOLIDAY HOURS VISIBLE" not in result_text.upper():
-                holiday_hours = extract_holiday_hours(result_text)
+                holiday_hours = extract_holiday_hours(result_text, target_holidays)
                 
                 if holiday_hours:
                     results.append({
@@ -248,7 +313,7 @@ Clarity score: X.XX (rating from 0.00 to 1.00)
     print(f"✅ Found {len(results)} stores with holiday hours posted")
     return results
 
-def aggregate_business_trends(results):
+def aggregate_business_trends(results, target_holidays):
     """Aggregate holiday trends by business"""
     business_trends = defaultdict(lambda: defaultdict(list))
     business_metadata = {}
@@ -308,10 +373,13 @@ def aggregate_business_trends(results):
     
     return summary, business_trends, business_metadata
 
-def create_excel_output(summary, business_trends, business_metadata, results):
+def create_excel_output(summary, business_trends, business_metadata, results, target_holidays, active_holidays):
     """Create Excel file with trends and examples"""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f'holiday_hours_trends_2025_{timestamp}.xlsx'
+    
+    # Create descriptive filename based on which holidays we're monitoring
+    holiday_short = "_".join([h['name'].replace("'", "").replace(" ", "") for h in active_holidays[:2]])
+    filename = f'holiday_hours_{holiday_short}_{timestamp}.xlsx'
     
     with pd.ExcelWriter(filename, engine='openpyxl') as writer:
         # Summary tab
@@ -365,8 +433,8 @@ def create_excel_output(summary, business_trends, business_metadata, results):
                 'report_date': result['report_date'],
                 'clarity_score': result['clarity_score']
             }
-            # Add holiday columns
-            for holiday in TARGET_HOLIDAYS:
+            # Add holiday columns (only for target holidays)
+            for holiday in target_holidays:
                 raw_row[holiday] = result['holiday_hours'].get(holiday, '')
             raw_data.append(raw_row)
         
@@ -379,28 +447,44 @@ def create_excel_output(summary, business_trends, business_metadata, results):
     print(f"✅ Created Excel file: {filename}")
     return filename
 
-def send_to_slack(filename, summary_df):
+def send_to_slack(filename, summary_df, active_holidays):
     """Send results to Slack"""
     print("\n📤 Sending to Slack...")
     client = WebClient(token=SLACK_BOT_TOKEN)
     
-    # Create summary message
+    # Create summary message with dynamic holiday info
     total_businesses = summary_df['Business Name'].nunique() if len(summary_df) > 0 else 0
     total_detections = len(summary_df)
     
+    # Build holiday countdown info
+    holiday_status = []
+    for h in active_holidays:
+        if h['days_until'] == 0:
+            holiday_status.append(f"{h['emoji']} *{h['name']}* is TODAY!")
+        elif h['days_until'] == 1:
+            holiday_status.append(f"{h['emoji']} *{h['name']}* is TOMORROW!")
+        else:
+            holiday_status.append(f"{h['emoji']} *{h['name']}* in {h['days_until']} days ({h['date'].strftime('%m/%d')})")
+    
+    holiday_countdown = "\n".join(holiday_status)
+    target_holiday_names = [h['name'] for h in active_holidays]
+    
     message = f"""
-🎄 *Holiday Hours Trend Analysis Complete (2025 Season)*
+🎄 *Holiday Hours Trend Analysis Complete*
+
+📅 *Monitoring for:*
+{holiday_countdown}
 
 📊 *Summary:*
-- Analyzed 3 days of DRSC images
-- Found holiday hours for {total_businesses} businesses
-- {total_detections} business/holiday combinations detected
+• Analyzed 3 days of DRSC images
+• Found holiday hours for {total_businesses} businesses
+• {total_detections} business/holiday combinations detected
 
 🏆 *Top Findings:*
 """
     
-    # Add top patterns for each holiday
-    for holiday in TARGET_HOLIDAYS:
+    # Add top patterns for each holiday being monitored
+    for holiday in target_holiday_names:
         holiday_data = summary_df[summary_df['Holiday'] == holiday] if len(summary_df) > 0 else pd.DataFrame()
         if len(holiday_data) > 0:
             message += f"\n*{holiday}:*\n"
@@ -413,7 +497,7 @@ def send_to_slack(filename, summary_df):
         response = client.files_upload_v2(
             channel=SLACK_CHANNEL_ID,
             file=filename,
-            title=f"Holiday Hours Trends 2025 - {datetime.datetime.now().strftime('%Y-%m-%d')}",
+            title=f"Holiday Hours Trends - {datetime.datetime.now().strftime('%Y-%m-%d')}",
             initial_comment=message
         )
         print("✅ Posted to Slack!")
@@ -425,22 +509,53 @@ def send_to_slack(filename, summary_df):
 # ============= MAIN EXECUTION =============
 if __name__ == "__main__":
     try:
+        today = datetime.date.today()
+        
+        # Target holidays: Christmas Eve, Christmas Day, New Year's Eve, New Year's Day
+        target_holidays = ['Christmas Eve', 'Christmas Day', "New Year's Eve", "New Year's Day"]
+        
+        # Build active_holidays list for display and Slack
+        config = get_holiday_config(today.year)
+        active_holidays = []
+        for holiday_name in target_holidays:
+            if holiday_name in config:
+                h_info = config[holiday_name]
+                days_until = (h_info['date'] - today).days
+                active_holidays.append({
+                    'name': holiday_name,
+                    'date': h_info['date'],
+                    'emoji': h_info['emoji'],
+                    'days_until': days_until
+                })
+        
+        print(f"\n🎄 Scanning for holiday hours...")
+        print(f"   Looking for: {', '.join(target_holidays)}")
+        for h in active_holidays:
+            if h['days_until'] == 0:
+                print(f"   {h['emoji']} {h['name']} is TODAY!")
+            elif h['days_until'] == 1:
+                print(f"   {h['emoji']} {h['name']} is TOMORROW!")
+            elif h['days_until'] > 0:
+                print(f"   {h['emoji']} {h['name']} in {h['days_until']} days ({h['date'].strftime('%m/%d')})")
+            else:
+                print(f"   {h['emoji']} {h['name']} was {abs(h['days_until'])} days ago")
+        
         # Get data
         df = get_mode_data()
         
-        # Analyze for holiday hours
-        results = analyze_holiday_hours(df)
+        # Analyze for holiday hours (only target holidays)
+        results = analyze_holiday_hours(df, target_holidays)
         
         if len(results) > 0:
             # Aggregate trends
-            summary, business_trends, business_metadata = aggregate_business_trends(results)
+            summary, business_trends, business_metadata = aggregate_business_trends(results, target_holidays)
             
             # Create Excel output
-            filename = create_excel_output(summary, business_trends, business_metadata, results)
+            filename = create_excel_output(summary, business_trends, business_metadata, results, target_holidays, active_holidays)
             
             # Send to Slack
             summary_df = pd.DataFrame(summary) if summary else pd.DataFrame()
-            send_to_slack(filename, summary_df)
+            send_to_slack(filename, summary_df, active_holidays)
             
             print(f"\n✅ Analysis complete!")
             print(f"   Found {len(results)} stores with holiday hours")

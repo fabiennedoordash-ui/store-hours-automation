@@ -7,6 +7,7 @@ import openai
 from tqdm import tqdm
 import re
 import datetime
+from zoneinfo import ZoneInfo
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import os
@@ -35,6 +36,39 @@ print(f"   OPENAI_API_KEY: {'Set' if openai.api_key else 'MISSING'}")
 print(f"   SLACK_BOT_TOKEN: {'Set' if SLACK_BOT_TOKEN else 'MISSING'}")
 
 # ============= CONFIGURATION =============
+
+# Default timezone for determining temp closure duration
+# Change this to match your operational timezone
+DEFAULT_TIMEZONE = 'America/Los_Angeles'  # Pacific Time
+
+def get_temp_closure_duration(store_timezone=None):
+    """
+    Determine temp closure duration based on current local time.
+    - Before 5pm: 12 hours
+    - After 5pm: 5 hours
+    
+    Args:
+        store_timezone: Optional timezone string (e.g., 'America/New_York'). 
+                        Falls back to DEFAULT_TIMEZONE if not provided.
+    
+    Returns:
+        int: Duration in hours (12 or 5)
+    """
+    try:
+        tz = ZoneInfo(store_timezone if store_timezone else DEFAULT_TIMEZONE)
+        current_local_time = datetime.datetime.now(tz)
+        current_hour = current_local_time.hour
+        
+        if current_hour >= 17:  # 5pm or later
+            print(f"   ⏰ Current time: {current_local_time.strftime('%I:%M %p %Z')} - Using 5-hour duration")
+            return 5
+        else:
+            print(f"   ⏰ Current time: {current_local_time.strftime('%I:%M %p %Z')} - Using 12-hour duration")
+            return 12
+    except Exception as e:
+        print(f"   ⚠️ Timezone error: {e}. Defaulting to 12 hours.")
+        return 12
+
 closure_categories = {
     "system issue": ["system", "technical", "pos", "payment", "network", "connectivity", "outage"],
     "maintenance issue": ["maintenance", "repair", "equipment", "electrical"],
@@ -66,7 +100,7 @@ address_change_phrases = [
     "moved to:", "find us at our new location"
 ]
 
-# Long-term temporary closure phrases
+# Long-term temporary closure phrases - NOW TREATED SAME AS REGULAR TEMP CLOSURE
 long_term_closure_phrases = [
     "closed until further notice", "until further notice", "closed indefinitely",
     "temporarily closed until further notice"
@@ -770,9 +804,14 @@ def get_mode_data():
     print(f"✅ Retrieved {len(df)} unique stores\n")
     return df
 
-# ============= FUNCTION 2: PROCESS WITH OPENAI (FIXED LENGTH ISSUE) =============
+# ============= FUNCTION 2: PROCESS WITH OPENAI (UPDATED WITH TIME-BASED DURATION) =============
 def process_store_hours(df):
     print("\n🤖 Processing with OpenAI vision API...")
+    
+    # Calculate temp duration once at the start of processing
+    # This ensures consistent duration for all stores in this batch
+    default_temp_duration = get_temp_closure_duration()
+    print(f"   📋 Using {default_temp_duration}-hour temp closure duration for this run")
     
     recommendations, reasons, summary_reasons = [], [], []
     deactivation_reason_id, is_temp_deactivation = [], []
@@ -847,9 +886,8 @@ PRIORITY ORDER (check in this order):
 
 Choose ONE recommendation:
 - **Address Change** - ONLY if THIS STORE is explicitly moving to a new address
-- **Temporarily Close For Day - Long Term** - If you see "closed until further notice"
+- **Temporarily Close For Day** - For "closed until further notice", payment issues, power issues, temporary closure
 - **Permanently Close Store** - ONLY if you see clear permanent closure signage
-- **Temporarily Close For Day** - For payment issues, power issues, temporary closure
 - **Change Store Hours** - If hours are readable AND different from DoorDash
 - **No Change** - If hours are unreadable or match DoorDash hours
 
@@ -986,8 +1024,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 for key, action in rec_mapping.items():
                     if key in gpt_rec:
                         if action == "Temporarily Close For Day":
-                            # Handle temp closures
-                            is_long_term = "long term" in gpt_rec or is_long_term_closure(result)
+                            # Handle temp closures - ALL use the same time-based duration now
                             recommendations.append("Temporarily Close For Day")
                             reasons.append(reason)
                             summary_reasons.append(categorize_closure(lower))
@@ -996,7 +1033,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                             is_temp_deactivation.append(True)
                             confidence_scores.append(max(0.80, clarity))
                             new_addresses.append("")
-                            temp_duration.append(700 if is_long_term else 12)
+                            temp_duration.append(default_temp_duration)  # Use time-based duration
                             for day in bulk_hours:
                                 bulk_hours[day]["start"].append("")
                                 bulk_hours[day]["end"].append("")
@@ -1106,7 +1143,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 row_processed = True
                 continue
 
-            # LONG-TERM CLOSURE
+            # LONG-TERM CLOSURE - Now uses same duration as regular temp closure
             if is_long_term_closure(result):
                 if clarity < 0.70:
                     recommendations.append("No change")
@@ -1132,7 +1169,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.85, clarity))
                 new_addresses.append("")
-                temp_duration.append(700)
+                temp_duration.append(default_temp_duration)  # Use time-based duration (was 700)
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
@@ -1198,7 +1235,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
-                temp_duration.append(12)
+                temp_duration.append(default_temp_duration)  # Use time-based duration
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
@@ -1237,7 +1274,7 @@ Clarity score: X.XX (0.00-1.00, two decimal places)
                 is_temp_deactivation.append(True)
                 confidence_scores.append(max(0.80, clarity))
                 new_addresses.append("")
-                temp_duration.append(12)
+                temp_duration.append(default_temp_duration)  # Use time-based duration
                 for day in bulk_hours:
                     bulk_hours[day]["start"].append("")
                     bulk_hours[day]["end"].append("")
@@ -1521,10 +1558,14 @@ def send_to_slack(df, timestamp_str):
         rec_counts = df['RECOMMENDATION'].value_counts().to_dict()
         total_stores = len(df)
         
+        # Get the duration used for this run
+        temp_duration_used = get_temp_closure_duration()
+        
         summary_parts = []
         summary_parts.append("DRSC AI Stats:")
         summary_parts.append("Store Hours Analysis Complete")
         summary_parts.append(f"Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        summary_parts.append(f"Temp Closure Duration: {temp_duration_used} hours")
         summary_parts.append("")
         
         summary_parts.append(f"• *Total stores analyzed: {total_stores}*")
@@ -1573,7 +1614,7 @@ def send_to_slack(df, timestamp_str):
 # ============= MAIN EXECUTION =============
 if __name__ == "__main__":
     print("="*60)
-    print("AUTOMATED STORE HOURS ANALYSIS - FIXED VERSION V2")
+    print("AUTOMATED STORE HOURS ANALYSIS - UPDATED WITH TIME-BASED DURATION")
     print("="*60 + "\n")
     
     try:
